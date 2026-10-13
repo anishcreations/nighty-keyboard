@@ -405,8 +405,8 @@ final class FakePWM: PWMDriver {
                    "Modeled steady light stays near its selected narrow envelope")
             let writes = d.fades.count
             t.selectDepth(depth == .deepest ? .gentler : .deepest, at: 120)
-            expect(d.fades.count == writes + 1 && d.fades.last?.1 == DeepDimmingSession.rampMilliseconds,
-                   "Depth change uses a continuous long ramp, not another startup blackout")
+            expect(d.fades.count == writes + 1 && d.fades.last?.1 == DeepDimmingSession.transitionMilliseconds,
+                   "Depth change uses a continuous transition without a startup blackout")
             expect(t.stop(), "Narrow-envelope session restores settings")
         }
         do {
@@ -425,6 +425,55 @@ final class FakePWM: PWMDriver {
             expect(t.running && (samples.max() ?? 1) - (samples.min() ?? 0) < 0.016,
                    "Uneven timer delivery does not accumulate modeled brightness drift")
             expect(t.stop(), "Jitter-compensated mode still restores settings")
+        }
+        for depth in DeepDimmingSession.Depth.allCases {
+            let d = FakeKeyboard(); let t = DeepDimmingSession(device: d)
+            t.selectDepth(depth, at: 0); _ = t.start(at: 0)
+            var now: Double = 0; var samples: [Double] = []
+            for i in 0..<6000 {
+                now += [0.008, 0.019, 0.033][i % 3]; t.tick(at: now)
+                if now > 15, let value = t.modeledFraction(at: now) { samples.append(value) }
+            }
+            let swing = (samples.max() ?? 1) - (samples.min() ?? 0)
+            expect(t.running && swing < 0.006, "All seven levels limit modeled absolute ripple under uneven delivery")
+            expect(swing / depth.center < 0.06, "Lowest modeled ripple stays below 6% of its selected target")
+            expect(t.stop(), "Every new dim level restores the saved state")
+        }
+        expect(DeepDimmingSession.Depth.allCases.count == 7 && DeepDimmingSession.Depth.barely.center < 0.25,
+               "New levels extend below the previous dimmest target")
+        for depth in DeepDimmingSession.Depth.allCases {
+            let d = FakeKeyboard(); let t = DeepDimmingSession(device: d)
+            t.selectDepth(depth, at: 0); _ = t.start(at: 0)
+            var now: Double = 0; var wakeups = 0; var advances = true
+            while now < 60, let next = t.nextWakeTime {
+                if next <= now { advances = false; break }
+                now = next + 0.003; t.tick(at: now); wakeups += 1
+            }
+            expect(advances, "One-shot deadlines advance without a busy loop")
+            expect(t.running && wakeups < 800, "All depths use fewer than 800 wakeups per minute versus 3000 polling ticks")
+            expect(t.stop() && t.nextWakeTime == nil, "Stop cancels deadline scheduling")
+        }
+        do {
+            let d = FakeKeyboard(); let t = DeepDimmingSession(device: d); _ = t.start(at: 0)
+            t.tick(at: t.nextWakeTime!); d.automatic = true
+            t.tick(at: t.nextWakeTime!)
+            expect(!t.running && t.nextWakeTime == nil, "Deadline checks yield to automatic brightness")
+        }
+        do {
+            let d = FakeKeyboard(); let t = DeepDimmingSession(device: d); _ = t.start(at: 0)
+            t.suspend()
+            expect(t.nextWakeTime == nil && t.snapshot != nil, "Sleep cancels future deadlines but keeps recovery")
+        }
+        do {
+            let d = FakeKeyboard(); let t = DeepDimmingSession(device: d); _ = t.start(at: 0)
+            t.tick(at: 0.08); t.tick(at: 0.5); t.tick(at: 0.7)
+            t.tick(at: t.nextWakeTime!)
+            t.tick(at: 2.706) // Finish the four-second transition to the Balanced envelope.
+            t.tick(at: t.nextWakeTime!)
+            let due = t.nextWakeTime!; t.tick(at: due + 0.07)
+            expect(t.running, "Small delivery pause is tolerated when long-fade drift stays bounded")
+            t.tick(at: t.nextWakeTime! + 2)
+            expect(!t.running && d.brightness == 0.4, "Large stale deadline restores settings instead of catching up")
         }
         print("PASS: \(assertions) assertions covering state ownership, no repeated writes, recovery, sleep, PWM readback, continuous fades, and failures.")
     }

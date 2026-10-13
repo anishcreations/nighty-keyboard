@@ -28,20 +28,28 @@ observation, verification, fade ticks, sleep, locking, wake, and termination.
 
 ## Deeper dimming
 
-`DeepDimmingSession` retargets ten-second hardware fades between Off and a
-near-minimum nonzero request. Its linear-ramp model uses these envelopes:
+`DeepDimmingSession` retargets hardware fades between Off and a near-minimum
+request. Its linear-ramp model uses these targets:
 
-| Setting | Lower | Upper |
+| Level | Setting | Target fraction |
 | --- | --- | --- |
-| Deeper | 0.245 | 0.255 |
-| Balanced | 0.495 | 0.505 |
-| Gentler | 0.745 | 0.755 |
+| 1 | Barely lit | 0.04 |
+| 2 | Very low | 0.06 |
+| 3 | Low | 0.10 |
+| 4 | Dim | 0.16 |
+| 5 | Deeper | 0.25 |
+| 6 | Balanced | 0.50 |
+| 7 | Gentler | 0.75 |
 
-Fractions are model values, not measured PWM duty or light output. Retarget timing
-uses actual elapsed time. Depth changes continue from the current estimate without
-restarting from Off. Logical readback checks commands; rejected commands, late
-scheduling, macOS changes, and idle/sleep stop the session. Intentional Off
-suppression is allowed. No catch-up bursts or runtime expiry are used.
+Fractions are model values, not measured PWM duty or light output. The envelope
+half-width is max(0.0006, target × 0.003). Hold fades adapt between 10–60 seconds;
+initial and level-change transitions use four seconds.
+
+One-shot timers follow readback and fade deadlines, with status checks scheduled
+every 500 ms. Normal observation pauses during deeper mode. Retargeting accounts
+for elapsed time and preserves the current ramp when switching depth. Rejected
+commands, excessive drift, macOS changes, or idle/sleep stop the session.
+Intentional Off suppression is allowed; stale commands are never replayed.
 
 ## Recovery
 

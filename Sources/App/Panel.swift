@@ -138,7 +138,8 @@ final class PanelController: NSViewController {
     var deepMessage: String?
     var onDepthChanged: ((Int) -> Void)?
     var onDeepOff: (() -> Void)?
-    private let depths = NSSegmentedControl(labels: ["Deeper", "Balanced", "Gentler"], trackingMode: .selectOne, target: nil, action: nil)
+    private let depthCaption = NSTextField(labelWithString: "")
+    private let depths = NSSlider(value: Double(DeepDimmingSession.Depth.balanced.rawValue), minValue: 0, maxValue: Double(DeepDimmingSession.Depth.allCases.count - 1), target: nil, action: nil)
     private let keepCurrentButton = NSButton(title: "Keep current macOS settings", target: nil, action: nil)
     private let deepButton = NSButton(title: "Enable deeper dimming", target: nil, action: nil)
     private let dial = LightDial(frame: NSRect(x: 64, y: 98, width: 232, height: 232))
@@ -173,8 +174,10 @@ final class PanelController: NSViewController {
         deepButton.font = .systemFont(ofSize: 11)
         style(keepCurrentButton, frame: NSRect(x: 24, y: 454, width: 312, height: 28), action: #selector(keepCurrent))
         keepCurrentButton.font = .systemFont(ofSize: 11)
-        depths.frame = NSRect(x: 24, y: 454, width: 312, height: 28)
-        depths.selectedSegment = 1; depths.target = self; depths.action = #selector(depthChanged); view.addSubview(depths)
+        depths.frame = NSRect(x: 24, y: 450, width: 312, height: 26)
+        depths.integerValue = DeepDimmingSession.Depth.balanced.rawValue; depths.numberOfTickMarks = DeepDimmingSession.Depth.allCases.count; depths.allowsTickMarkValuesOnly = true; depths.isContinuous = false; depths.setAccessibilityLabel("Deeper dimming level, 1 darkest to 7 brightest"); depths.target = self; depths.action = #selector(depthChanged); view.addSubview(depths)
+        depthCaption.frame = NSRect(x: 24, y: 480, width: 312, height: 16)
+        depthCaption.font = .systemFont(ofSize: 10); depthCaption.textColor = Ink.muted; depthCaption.alignment = .center; view.addSubview(depthCaption)
         let status = NSView(frame: NSRect(x: 24, y: 501, width: 312, height: 72))
         status.wantsLayer = true; status.layer?.backgroundColor = Ink.surface.cgColor; status.layer?.cornerRadius = 14; view.addSubview(status)
         stateTitle.frame = NSRect(x: 39, y: 513, width: 281, height: 20)
@@ -196,8 +199,11 @@ final class PanelController: NSViewController {
             dial.externalValue = controller.state == .ready || controller.state == .paused ? controller.observedBrightness : nil
             dial.selectedIndex = controller.selectedIndex; showDetail(controller.selectedIndex)
         }
-        dial.modeTitle = deepRunning ? "Deep" : nil
-        if deepRunning { detail.stringValue = ["Deeper", "Balanced", "Gentler"][depths.selectedSegment] + " · hardware fades · experimental" }
+        dial.modeTitle = deepRunning ? "Deep \(depths.integerValue + 1)" : nil
+        if let depth = DeepDimmingSession.Depth(rawValue: depths.integerValue) {
+            depthCaption.stringValue = "Level \(depth.rawValue + 1) / 7 · " + depth.title + " · left is dimmer"
+            if deepRunning { detail.stringValue = "Deep \(depth.rawValue + 1) · " + depth.title + " · experimental" }
+        }
         dial.isEnabled = controller.canAdjust && !deepRunning; dial.needsDisplay = true
         presets.forEach { $0.isEnabled = controller.canAdjust && !deepRunning }
         offButton.isEnabled = controller.canAdjust || deepRunning
@@ -214,7 +220,7 @@ final class PanelController: NSViewController {
         if deepRunning { stateTitle.stringValue = "Deeper dimming · experimental" }
         depths.isEnabled = deepRunning || controller.canAdjust
         let recoveryVisible = controller.snapshot != nil && controller.state == .failed
-        depths.isHidden = recoveryVisible; keepCurrentButton.isHidden = !recoveryVisible
+        depths.isHidden = recoveryVisible; depthCaption.isHidden = recoveryVisible; keepCurrentButton.isHidden = !recoveryVisible
         keepCurrentButton.isEnabled = !controller.restorationPending
         message.stringValue = deepMessage ?? controller.message
     }
@@ -240,7 +246,7 @@ final class PanelController: NSViewController {
         if !controller.restore() || controller.snapshot != nil { failures.append("Use macOS action failed") }
         deepSession()
         if !deepRunning || !returnButton.isEnabled || !offButton.isEnabled || dial.isEnabled { failures.append("Continuous dimming controls failed") }
-        depths.selectedSegment = 0; depthChanged()
+        depths.integerValue = 0; depthChanged()
         restore()
         if deepRunning { failures.append("Use macOS did not stop deeper dimming") }
         deepSession(); turnOff(); controller.verifySelection()
@@ -262,7 +268,7 @@ final class PanelController: NSViewController {
     }
     @objc private func keepCurrent() { deepMessage = nil; _ = controller.keepCurrentSettings() }
     @objc private func deepSession() { onDeepDimming?() }
-    @objc private func depthChanged() { onDepthChanged?(depths.selectedSegment) }
+    @objc private func depthChanged() { onDepthChanged?(depths.integerValue) }
     @objc private func dialChanged() { controller.select(dial.selectedIndex) }
     @objc private func presetSelected(_ sender: NSButton) { controller.select(sender.tag) }
     @objc private func turnOff() { if deepRunning { onDeepOff?() } else { controller.select(0) } }

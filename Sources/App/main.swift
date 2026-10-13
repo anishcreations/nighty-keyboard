@@ -30,6 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var deepSession: DeepDimmingSession?
     var selectedDepth: DeepDimmingSession.Depth = .balanced
     var fadeTimer: Timer?
+    var fadeWakeCount = 0
+    var fadeMaxLateness: TimeInterval = 0
     var verificationWork: DispatchWorkItem?
     var wakeTimer: Timer?
     var previewWindow: NSWindow?
@@ -53,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             self.selectedDepth = depth
             self.deepSession?.selectDepth(depth, at: ProcessInfo.processInfo.systemUptime)
             if self.deepSession?.running == false { self.finishDeepDimming() }
+            else if self.deepSession?.running == true { self.scheduleNextFadeTick() }
             self.panel.update()
         }
         panel.onDeepOff = { [weak self] in
@@ -86,11 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             showPreview()
         } else {
             installLifecycle()
-            observation = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                guard let self = self, self.deepSession == nil else { return }
-                if self.popover.isShown { self.controller.refresh() } else { self.controller.observe() }
-            }
-            observation?.tolerance = 0.4
+            startObservation()
             if UserDefaults.standard.bool(forKey: "hasOpened") == false {
                 UserDefaults.standard.set(true, forKey: "hasOpened")
                 DispatchQueue.main.async { [weak self] in self?.togglePanel() }
@@ -133,12 +132,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         _ = trial.start(at: ProcessInfo.processInfo.systemUptime)
         panel.deepMessage = trial.message; panel.deepRunning = trial.running; panel.update()
         guard trial.running else { finishDeepDimming(); return }
-        fadeTimer = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
+        observation?.invalidate(); observation = nil
+        scheduleNextFadeTick()
+    }
+    func scheduleNextFadeTick() {
+        fadeTimer?.invalidate(); fadeTimer = nil
+        guard let trial = deepSession, let deadline = trial.nextWakeTime else { return }
+        let delay = max(0.001, deadline - ProcessInfo.processInfo.systemUptime)
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
             guard let self = self, let trial = self.deepSession else { return }
+            self.fadeTimer = nil; self.fadeWakeCount += 1
+            self.fadeMaxLateness = max(self.fadeMaxLateness, ProcessInfo.processInfo.systemUptime - deadline)
             trial.tick(at: ProcessInfo.processInfo.systemUptime)
-            if !trial.running { self.finishDeepDimming() }
+            if trial.running { self.scheduleNextFadeTick() } else { self.finishDeepDimming() }
         }
-        if let timer = fadeTimer { RunLoop.main.add(timer, forMode: .common) }
+        timer.tolerance = 0.002
+        fadeTimer = timer; RunLoop.main.add(timer, forMode: .common)
+    }
+    func startObservation() {
+        guard !preview else { return }
+        observation?.invalidate()
+        observation = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self = self, self.deepSession == nil else { return }
+            if self.popover.isShown { self.controller.refresh() } else { self.controller.observe() }
+        }
+        observation?.tolerance = 0.4
     }
     func finishDeepDimming() {
         guard let trial = deepSession else { return }
@@ -149,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             if trial.restorationAwaitingConfirmation { controller.waitForRestoration() }
         } else if let device = connectedDevice { controller.attach(device) }
         deepSession = nil; panel.deepRunning = false; panel.deepMessage = message; panel.update()
+        startObservation()
     }
 
     @objc func togglePanel() {
@@ -214,6 +233,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         window.title = "Nighty Keyboard · Preview (no hardware changes)"
         window.contentViewController = panel; window.center(); window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true); previewWindow = window
+        if arguments.contains("--profile-preview") {
+            toggleDeepDimming()
+            let began = ProcessInfo.processInfo.systemUptime
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+                let elapsed = ProcessInfo.processInfo.systemUptime - began
+                let active = self.deepSession?.running == true
+                print("PROFILE: fake keyboard; elapsed=\(String(format: "%.2f", elapsed))s; active=\(active); fadeWakeups=\(self.fadeWakeCount); oldPollingWakeups=\(Int(elapsed * 50)); maxLateness=\(String(format: "%.3f", self.fadeMaxLateness))s; endStatus=\(self.panel.deepMessage ?? ""); hardwareWrites=0")
+                if let trial = self.deepSession { _ = trial.stop(); self.finishDeepDimming() }
+                NSApp.terminate(nil)
+            }
+        }
         if arguments.contains("--verify-ui") {
             DispatchQueue.main.async {
                 let failures = self.panel.validatePreview()
@@ -250,6 +280,6 @@ if arguments.contains("--diagnose-pwm") {
 }
 
 let app = NSApplication.shared
-let delegate = AppDelegate(preview: arguments.contains("--preview") || arguments.contains("--render-preview") || arguments.contains("--verify-ui"))
+let delegate = AppDelegate(preview: arguments.contains("--preview") || arguments.contains("--render-preview") || arguments.contains("--verify-ui") || arguments.contains("--profile-preview"))
 app.delegate = delegate
 app.run()

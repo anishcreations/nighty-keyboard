@@ -1,26 +1,33 @@
 # Changelog
 
+## 0.0.0 · build 9 — 2026-10-14
+
+- Replaced 50 Hz polling with one-shot fade and readback deadlines.
+- Paused normal observation during deeper mode; scheduled status checks every 500 ms.
+- Allowed scheduling pauses only while estimated light drift stays bounded.
+- Added `--profile-preview`: 154 fade wakeups in 15.04 seconds versus 751 polling ticks.
+- Added build cleanup and build-numbered packaging without duplicate installers.
+
+Validation: 208 device-free checks and native UI checks pass. Actual battery drain
+and hardware-call overhead remain unmeasured.
+
+## 0.0.0 · build 8 — 2026-10-14
+
+- Added seven deeper levels, including four below the previous Deeper target.
+- Narrowed fade envelopes and adapted durations to the selected level.
+- Preserved the current ramp and recovery snapshot when switching levels.
+
 ## 0.0.0 · build 7 — 2026-10-14
 
-### Changed
+- Narrowed deeper-mode envelopes and increased fade duration to 10 seconds.
+- Compensated for timer drift and removed the Off restart when changing depth.
+- Added regression checks and trimmed documentation.
 
-- Reduced deeper-mode envelopes from a 0.20-wide range to 0.01 around each target.
-- Increased hardware fade duration from 400 ms to 10 seconds.
-- Compensated retarget timing for actual elapsed time to avoid accumulating drift.
-- Kept the current ramp when changing depth instead of restarting from Off.
-- Trimmed the README and developer docs.
-
-### Validation
-
-- 137 device-free assertions pass, including all depths and uneven timer delivery.
-- Modeled steady swing stays below 0.016 of the minimum endpoint in jitter tests.
-- Native UI checks, universal build, code signature, and installer verification pass.
-- User feedback reports improved pulsing on one Mac. Optical measurements and
-  validation on other hardware remain pending.
+User feedback reported reduced pulsing on one Mac. Optical measurements and other
+hardware validation remain pending.
 
 ## 0.0.0 · initial source release
 
-- Native menu bar dial, presets, continuous deeper mode, and login option.
-- Atomic recovery records, delayed restoration checks, and keep-current recovery.
-- Runtime-checked CoreBrightness and guarded raw-HID interfaces.
-- Universal build, device-free checks, and DMG/ZIP packaging.
+- Native dial, presets, deeper mode, and login option.
+- Atomic recovery, delayed restoration checks, and keep-current recovery.
+- Runtime-checked CoreBrightness, guarded HID interfaces, and universal packaging.

@@ -9,7 +9,7 @@ A native macOS menu bar app for keyboard brightness. Swift, AppKit, and MIT lice
 ## Features
 
 - Brightness dial, arrow-key navigation, and Low, Work, and Bright presets.
-- Continuous deeper dimming with Deeper, Balanced, and Gentler settings.
+- Seven deeper-dimming levels, from Barely lit to Gentler.
 - Restore previous settings, keep current macOS settings, or turn the light off.
 - Open at login on macOS 13+.
 
@@ -29,14 +29,16 @@ open "build/Nighty Keyboard.app"
 Click the menu bar dial and drag its rim or choose a preset. **Enable deeper
 dimming** runs with the panel closed. **Stop deeper dimming**, **Use macOS**, and
 **Off** end it. Sleep, idle, macOS changes, and command or timing failures also
-stop the mode; it does not restart automatically after sleep.
+stop the mode; it does not restart automatically after sleep. Move the deeper
+slider left for less light. The darkest levels may still visibly pulse.
 
 ```sh
 ./scripts/package.sh
 ```
 
-Packages are written to `build/`. Quit the previous copy, then drag the app from
-the DMG into Applications.
+Packages use `build/NightyKeyboard-<version>-build<number>.dmg` and `.zip`.
+Quit the previous copy before installing. Run `./scripts/clean.sh` to remove
+caches and obsolete artifacts while keeping the current app and packages.
 
 ## Compatibility
 

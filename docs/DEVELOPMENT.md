@@ -11,8 +11,10 @@ No third-party packages or Xcode project are needed.
 ./scripts/package.sh
 ```
 
-Outputs and caches live in ignored `build/`. Rebuild before packaging source or
-metadata changes; packaging otherwise uses the existing app.
+Outputs live in ignored `build/`. Rebuild after source or metadata changes.
+Packaging creates one build-numbered DMG/ZIP pair and removes temporary staging.
+`./scripts/clean.sh` removes caches and older packages, keeps the current app and
+installers, and moves diagnostic records to ignored `.local-diagnostics/`.
 
 - `INTEL_MIN_VERSION`: override the default Intel target of macOS 13.
 - `REGENERATE_ICON=1`: regenerate the icon during a build.
@@ -22,12 +24,13 @@ metadata changes; packaging otherwise uses the existing app.
 ```sh
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --preview
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --verify-ui
+"build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --profile-preview
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --render-preview /tmp/nighty.png
 ```
 
-Controller tests use `KeyboardDevice` and `PWMDriver` fakes. UI checks exercise
-bounds, accessibility, presets, depth, recovery, Off, and Use macOS. These checks
-do not measure physical light output.
+Tests use fake devices. `--verify-ui` checks controls and layout; `--profile-preview`
+reports wakeups during 15 seconds of simulated dimming. Neither measures battery
+drain, hardware-call overhead, or physical light output.
 
 ## Read-only diagnostics
 
