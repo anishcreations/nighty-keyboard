@@ -8,7 +8,7 @@ PACKAGE="$PWD/build/nighty-package"
 if [ -d "$PACKAGE" ]; then rm -r "$PACKAGE"; fi
 mkdir -p "$PACKAGE"
 cp -R "$APP" build/nighty-package/
-cp README.md LICENSE build/nighty-package/
+cp README.md CHANGELOG.md LICENSE build/nighty-package/
 mkdir -p build/nighty-package/docs
 cp docs/ARCHITECTURE.md docs/DEVELOPMENT.md docs/preview.png build/nighty-package/docs/
 if [ ! -L build/nighty-package/Applications ]; then ln -s /Applications build/nighty-package/Applications; fi

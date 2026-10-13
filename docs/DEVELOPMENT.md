@@ -1,36 +1,33 @@
 # Development
 
-## Requirements
+Requires macOS, Apple Command Line Tools, Swift, and the macOS SDK.
+No third-party packages or Xcode project are needed.
 
-- macOS with Apple Command Line Tools, Swift, and the macOS SDK.
-- No third-party packages or Xcode project are required.
+## Build
 
-## Scripts
+```sh
+./scripts/test.sh
+./scripts/build.sh
+./scripts/package.sh
+```
 
-| Script | Result |
-| --- | --- |
-| `./scripts/test.sh` | Compiles and runs device-free controller checks |
-| `./scripts/build.sh` | Builds and ad hoc signs a universal app |
-| `./scripts/package.sh` | Packages the built app as a DMG and ZIP |
-| `scripts/make-icon.swift` | Generates the native app icon |
+Outputs and caches live in ignored `build/`. Rebuild before packaging source or
+metadata changes; packaging otherwise uses the existing app.
 
-The build targets arm64 on macOS 11+ and x86_64 on macOS 13+. Set
-`INTEL_MIN_VERSION` to adjust the Intel target; support depends on the installed
-Swift toolchain. Set `REGENERATE_ICON=1` when rebuilding the icon.
+- `INTEL_MIN_VERSION`: override the default Intel target of macOS 13.
+- `REGENERATE_ICON=1`: regenerate the icon during a build.
 
-Build outputs and module caches are under `build/` and are excluded from Git.
-The packaging script uses an existing app when available; rebuild first after
-changing source or app metadata.
-
-## Preview and UI checks
-
-These modes use a fake keyboard and make no hardware brightness changes:
+## Device-free preview and UI checks
 
 ```sh
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --preview
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --verify-ui
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --render-preview /tmp/nighty.png
 ```
+
+Controller tests use `KeyboardDevice` and `PWMDriver` fakes. UI checks exercise
+bounds, accessibility, presets, depth, recovery, Off, and Use macOS. These checks
+do not measure physical light output.
 
 ## Read-only diagnostics
 
@@ -39,31 +36,17 @@ These modes use a fake keyboard and make no hardware brightness changes:
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --diagnose-pwm
 ```
 
-Diagnostics report the interface, keyboard state, and guarded raw-HID availability.
-Logical readback confirms software-visible state, not emitted light. The everyday
-app disables `--verify-hardware` and `--verify-pwm`.
+`--verify-hardware` and `--verify-pwm` are disabled in the app.
 
 ## Standalone tools
 
 | Source | Purpose |
 | --- | --- |
-| `ReadKeyboardState.m` | Reads keyboard properties without setters |
-| `PWMCapabilities.m` | Inspects HID capabilities |
+| `ReadKeyboardState.m` | Read properties without setters |
+| `PWMCapabilities.m` | Inspect HID capabilities |
 | `PWMProbe.m` | Manual hardware-changing probe |
 | `RestoreMacControl.m` | Manual idle-state and brightness repair |
-| `RestoreSavedKeyboard.m` | Restores a saved snapshot and checks readback |
+| `RestoreSavedKeyboard.m` | Restore a saved snapshot and check readback |
 
-The hardware-changing utilities are separate from the build and test scripts.
-Run them deliberately; they can alter keyboard settings. Saved-state repair backs
-up the snapshot and removes the recovery record only after confirmation.
-
-## Working on the app
-
-Use `KeyboardDevice` and `PWMDriver` fakes for controller changes. Keep hardware
-calls in the bridges, lifecycle coordination in `main.swift`, and presentation in
-`Panel.swift`. Recovery records must be durable before the first write. Do not treat
-a successful setter return as proof that the keyboard applied a change.
-
-Run the controller checks after behavioral changes and the fake-device UI check
-after changing controls or layout. Validate hardware and optical behavior separately
-before claiming support for a new Mac or macOS release.
+Hardware-changing tools are outside the build/test workflow. Saved-state repair
+backs up the record and removes it only after confirmation.

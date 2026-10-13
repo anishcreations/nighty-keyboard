@@ -4,7 +4,7 @@ import Foundation
 /// The envelope is a model of a linear ramp; it is NOT measured optical brightness.
 final class DeepDimmingSession {
     static let floorRequest: Float = 0.0001
-    static let rampMilliseconds = 400
+    static let rampMilliseconds = 10_000
     private let device: KeyboardDevice
     private(set) var snapshot: BrightnessController.Snapshot?
     private(set) var running = false
@@ -18,9 +18,11 @@ final class DeepDimmingSession {
     private var target: Float = 0
     private var rising = true
     private var initialized = false
+    private var ramp: FadeRamp?
     enum Depth: Int, CaseIterable { case deepest, balanced, gentler
-        var lower: Double { [0.15, 0.25, 0.45][rawValue] }
-        var upper: Double { [0.35, 0.45, 0.65][rawValue] }
+        var center: Double { [0.25, 0.50, 0.75][rawValue] }
+        var lower: Double { center - 0.005 }
+        var upper: Double { center + 0.005 }
     }
     private(set) var depth: Depth = .balanced
     private var lower: Double { depth.lower }
@@ -33,8 +35,10 @@ final class DeepDimmingSession {
         guard now.isFinite, now >= started else { _ = stop(reason: "Clock changed; deeper dimming stopped."); return }
         if device.idleDimmed || (device.suppressed && target != 0) { suspend(); return }
         if device.automatic { _ = stop(reason: "macOS took control.", preserveCurrent: true); return }
-        initialized = false; rising = true
-        _ = command(0, duration: 600, at: now, next: 0.7)
+        // Keep the in-flight light level; changing depth must not restart from Off.
+        guard initialized else { return }
+        let current = ramp?.value(at: now) ?? 0
+        issueRamp(up: current < depth.center, at: now)
     }
 
     init(device: KeyboardDevice) { self.device = device }
@@ -49,7 +53,7 @@ final class DeepDimmingSession {
         guard saveRecovery?(saved) ?? true else { message = "Could not save settings. No changes made."; return false }
         snapshot = saved
         guard !device.automatic || device.setAutomatic(false) else { _ = stop(); return false }
-        running = true; started = now; initialized = false; rising = true
+        running = true; started = now; initialized = false; rising = true; ramp = nil
         // Establish Off with a smooth ramp before entering the nominal subminimum envelope.
         guard command(0, duration: 600, at: now, next: 0.7) else { return false }
         message = "Deeper dimming active until stopped. Physical light output is unverified."
@@ -79,17 +83,30 @@ final class DeepDimmingSession {
         }
         guard now >= nextCommand else { return }
         if now - nextCommand > 0.05 { _ = stop(reason: "Timing slipped; deeper dimming stopped."); return }
-        let seconds = Double(Self.rampMilliseconds) / 1000
         if !initialized {
-            initialized = true; rising = true
-            _ = command(Self.floorRequest, duration: Self.rampMilliseconds, at: now, next: seconds * upper)
-        } else if rising {
-            rising = false
-            _ = command(0, duration: Self.rampMilliseconds, at: now, next: seconds * (1 - lower / upper))
+            initialized = true
+            ramp = FadeRamp(value: 0, target: 0, started: now, duration: 0)
+            issueRamp(up: true, at: now)
         } else {
-            rising = true
-            _ = command(Self.floorRequest, duration: Self.rampMilliseconds, at: now, next: seconds * (upper - lower) / (1 - lower))
+            issueRamp(up: !rising, at: now)
         }
+    }
+
+    /// Nominal ramp state, not a measurement of emitted light.
+    func modeledFraction(at now: TimeInterval) -> Double? { ramp?.value(at: now) }
+
+    private func issueRamp(up: Bool, at now: TimeInterval) {
+        let current = ramp?.value(at: now) ?? 0
+        let endpoint: Double = up ? 1 : 0
+        let boundary = up ? upper : lower
+        let seconds = Double(Self.rampMilliseconds) / 1000
+        // Compensate for elapsed scheduling time instead of assuming that the last
+        // correction landed exactly at the nominal lower/upper bound.
+        let interval = seconds * abs(boundary - current) / max(0.000001, abs(endpoint - current))
+        let next = max(0.1, interval) // Leave time for command readback before retargeting.
+        guard command(up ? Self.floorRequest : 0, duration: Self.rampMilliseconds, at: now, next: next) else { return }
+        rising = up
+        ramp = FadeRamp(value: current, target: endpoint, started: now, duration: seconds)
     }
 
     private func command(_ value: Float, duration: Int, at now: TimeInterval, next interval: TimeInterval) -> Bool {
@@ -122,5 +139,18 @@ final class DeepDimmingSession {
             message = reason + " Saved settings still need recovery."; return false
         }
         snapshot = nil; message = reason + " Settings returned to macOS."; return true
+    }
+}
+
+/// A monotonic linear-ramp estimate used to account for timer delivery jitter.
+struct FadeRamp {
+    let value: Double
+    let target: Double
+    let started: TimeInterval
+    let duration: TimeInterval
+    func value(at now: TimeInterval) -> Double {
+        guard duration > 0 else { return target }
+        let progress = max(0, min(1, (now - started) / duration))
+        return value + (target - value) * progress
     }
 }

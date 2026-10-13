@@ -133,7 +133,7 @@ static BOOL BLHasSignature(id obj, NSString *name, const char *result, NSArray<N
     } @catch (NSException *exception) { return NO; }
 }
 - (BOOL)setFade:(float)value milliseconds:(int)milliseconds keyboard:(uint64_t)keyboard {
-    if (!_available || !isfinite(value) || value < 0 || value > 1 || milliseconds < 0 || milliseconds > 2000 || ![self openWriter]) return NO;
+    if (!_available || !isfinite(value) || value < 0 || value > 1 || milliseconds < 0 || milliseconds > 10000 || ![self openWriter]) return NO;
     @try {
         // Fade property dictionary accepted by CoreBrightness.
         // Commit YES avoids the commit=false automatic-brightness suspension path.

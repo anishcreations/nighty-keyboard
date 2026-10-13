@@ -288,7 +288,7 @@ final class FakePWM: PWMDriver {
             expect(t.running && t.snapshot != nil && record != nil, "Deeper dimming stays active past sixty seconds without a time limit")
             expect(t.stop() && t.snapshot == nil && record == nil, "Explicit stop clears verified recovery")
             expect(d.brightness == 0.4 && d.automatic && d.releaseCount == 1, "Trial cancels ramp and restores original preferences")
-            expect(d.fades.count > 100 && d.fades.count < 600, "Hardware ramp train, not high-frequency app-side PWM")
+            expect(d.fades.count > 50 && d.fades.count < 600, "Hardware ramp train, not high-frequency app-side PWM")
             expect(d.fades.dropLast().allSatisfy { $0.1 > 0 && ($0.0 == 0 || $0.0 == DeepDimmingSession.floorRequest) }, "Only low endpoints with hardware fade durations")
             expect(d.fades.last?.1 == 0 && d.idleWrites.isEmpty, "Restoration cancels ramp without modifying idle flags")
             let count = d.fades.count; t.tick(at: 200)
@@ -389,6 +389,42 @@ final class FakePWM: PWMDriver {
             var cleared = false; c.saveRecovery = { cleared = $0 == nil; return true }
             expect(c.keepCurrentSettings() && cleared && c.snapshot == nil && c.canAdjust, "Explicit keep-current action exits recovery")
             expect(d.brightnessWrites.isEmpty && d.automaticWrites.isEmpty, "Keep-current recovery choice makes no hardware writes")
+        }
+        for depth in DeepDimmingSession.Depth.allCases {
+            let d = FakeKeyboard(); let t = DeepDimmingSession(device: d)
+            t.selectDepth(depth, at: 0); _ = t.start(at: 0)
+            var samples: [Double] = []
+            for i in 1...6000 {
+                let now = Double(i) * 0.02
+                t.tick(at: now)
+                if now > 15, let value = t.modeledFraction(at: now) { samples.append(value) }
+            }
+            let swing = (samples.max() ?? 1) - (samples.min() ?? 0)
+            expect(t.running && swing < 0.014, "Every depth keeps nominal ripple below 1.4% of the endpoint under 20ms ticks")
+            expect((samples.min() ?? 0) > depth.lower - 0.003 && (samples.max() ?? 1) < depth.upper + 0.003,
+                   "Modeled steady light stays near its selected narrow envelope")
+            let writes = d.fades.count
+            t.selectDepth(depth == .deepest ? .gentler : .deepest, at: 120)
+            expect(d.fades.count == writes + 1 && d.fades.last?.1 == DeepDimmingSession.rampMilliseconds,
+                   "Depth change uses a continuous long ramp, not another startup blackout")
+            expect(t.stop(), "Narrow-envelope session restores settings")
+        }
+        do {
+            let ramp = FadeRamp(value: 0.5, target: 1, started: 10, duration: 10)
+            expect(abs(ramp.value(at: 12) - 0.6) < 0.000001, "Ramp estimate accounts for actual elapsed time")
+            expect(ramp.value(at: 9) == 0.5 && ramp.value(at: 30) == 1, "Ramp estimate clamps before and after its duration")
+        }
+        do {
+            let d = FakeKeyboard(); let t = DeepDimmingSession(device: d); _ = t.start(at: 0)
+            var now: Double = 0; var samples: [Double] = []
+            for i in 0..<6000 {
+                now += [0.008, 0.019, 0.033][i % 3]
+                t.tick(at: now)
+                if now > 15, let value = t.modeledFraction(at: now) { samples.append(value) }
+            }
+            expect(t.running && (samples.max() ?? 1) - (samples.min() ?? 0) < 0.016,
+                   "Uneven timer delivery does not accumulate modeled brightness drift")
+            expect(t.stop(), "Jitter-compensated mode still restores settings")
         }
         print("PASS: \(assertions) assertions covering state ownership, no repeated writes, recovery, sleep, PWM readback, continuous fades, and failures.")
     }

@@ -1,29 +1,24 @@
 # Nighty Keyboard
 
-A small macOS menu bar app for turning down your keyboard light.
-Built with Swift and AppKit. Free, open source, and MIT licensed.
+A native macOS menu bar app for keyboard brightness. Swift, AppKit, and MIT licensed.
 
 <p align="center">
-  <img src="docs/preview.png" alt="Nighty Keyboard's amber brightness dial and deeper dimming controls" width="360">
+  <img src="docs/preview.png" alt="Nighty Keyboard brightness controls" width="360">
 </p>
 
-## Light, your way
+## Features
 
-- **A brightness dial** with arrow-key navigation and Low, Work, and Bright presets.
-- **Deeper dimming** with Deeper, Balanced, and Gentler settings, without a time limit.
-- **Use macOS** to restore your previous settings; **Off** to switch the light off.
-- **Recovery controls** to restore saved settings or explicitly keep the current ones.
-- **Open at login** on macOS 13 and later.
+- Brightness dial, arrow-key navigation, and Low, Work, and Bright presets.
+- Continuous deeper dimming with Deeper, Balanced, and Gentler settings.
+- Restore previous settings, keep current macOS settings, or turn the light off.
+- Open at login on macOS 13+.
 
-No accounts, subscriptions, analytics, network requests, or keyboard-input monitoring.
+Free, with no time limit, accounts, analytics, or keyboard-input monitoring.
+Deeper dimming is experimental; physical brightness and flicker are not measured.
 
-Deeper dimming uses repeated hardware fades near the steady brightness minimum.
-It is experimental: physical dimming depth and flicker have not been verified.
-Nearby dial settings may produce the same visible brightness on some keyboards.
+## Build and use
 
-## Build and run
-
-Install Apple's Command Line Tools, then run:
+Requires Apple Command Line Tools.
 
 ```sh
 ./scripts/test.sh
@@ -31,68 +26,58 @@ Install Apple's Command Line Tools, then run:
 open "build/Nighty Keyboard.app"
 ```
 
-Click the menu bar dial to open Nighty. Drag the dial's rim or choose a preset.
-For deeper dimming, click **Enable deeper dimming** and select a setting.
-It keeps running with the panel closed; **Stop deeper dimming**, **Use macOS**,
-and **Off** end the mode. Sleep, idle, macOS brightness changes, and timing or
-command failures also stop it. It does not automatically restart after sleep.
-
-To create a DMG and ZIP:
+Click the menu bar dial and drag its rim or choose a preset. **Enable deeper
+dimming** runs with the panel closed. **Stop deeper dimming**, **Use macOS**, and
+**Off** end it. Sleep, idle, macOS changes, and command or timing failures also
+stop the mode; it does not restart automatically after sleep.
 
 ```sh
 ./scripts/package.sh
 ```
 
-The packages are written to `build/`. Quit an older copy before installing or
-opening a replacement. Drag the app from the DMG into Applications.
+Packages are written to `build/`. Quit the previous copy, then drag the app from
+the DMG into Applications.
 
 ## Compatibility
 
-| Build | Minimum macOS |
+| Architecture | Minimum macOS build target |
 | --- | --- |
 | Apple Silicon · arm64 | 11.0 |
 | Intel · x86_64 | 13.0 |
 
-These are build targets, not a guarantee of hardware support. Nighty needs a
-built-in backlit keyboard and uses Apple's private CoreBrightness interface,
-which may change between macOS releases. Intel and older macOS versions need
-hardware validation. Local packages are ad hoc signed, not notarized.
+Requires a built-in backlit keyboard and Apple's private CoreBrightness interface.
+Intel and older macOS targets need hardware validation. Packages are ad hoc signed,
+not notarized.
 
 ## Codebase
 
 ```text
 Sources/
 ├── App/
-│   ├── main.swift                  App lifecycle, menu bar, timers, and CLI
-│   ├── Panel.swift                 Native dial, presets, and recovery UI
+│   ├── main.swift                  Lifecycle, menu bar, timers, and CLI
+│   ├── Panel.swift                 Dial, presets, and recovery UI
 │   ├── BrightnessController.swift  Steady brightness and settings ownership
-│   ├── DeepDimmingSession.swift    Continuous fade scheduling and depth settings
-│   ├── NativeDevice.swift          Keyboard adapter and atomic recovery storage
-│   ├── NativePWM.swift             Raw HID adapter and diagnostic status
-│   └── PWMSession.swift            Guarded raw-report session and recovery
+│   ├── DeepDimmingSession.swift    Fade scheduling and depth settings
+│   ├── NativeDevice.swift          Keyboard adapter and recovery storage
+│   ├── NativePWM.swift             Raw HID adapter and diagnostics
+│   └── PWMSession.swift            Raw-report session and recovery
 └── Hardware/
-    ├── KeyboardBridge.h/.m         Runtime-checked CoreBrightness boundary
-    └── PWMBridge.h/.m              HID descriptor discovery and readback guards
-Tests/                              Device-free controller regression checks
+    ├── KeyboardBridge.h/.m         CoreBrightness runtime boundary
+    └── PWMBridge.h/.m              HID discovery and readback guards
+Tests/                              Device-free regression checks
 Resources/                          App metadata and icon
 scripts/                            Build, test, package, and icon generation
-tools/                              Standalone diagnostics and repair utilities
-docs/                               Architecture, development, and UI preview
+tools/                              Diagnostics and manual repair utilities
+docs/                               Architecture, development, and preview
 ```
-
-Read the [architecture guide](docs/ARCHITECTURE.md) for control flow and recovery,
-or the [development guide](docs/DEVELOPMENT.md) for previews and diagnostics.
 
 ## Recovery
 
-If Nighty shows **Settings need attention**, choose **Restore saved settings**.
-Restoration waits for macOS readback and retains the record if it cannot be
-confirmed. An explicit nonzero restore can clear macOS's idle-dim state.
+**Restore saved settings** waits for macOS confirmation and retains the record
+on failure. A nonzero restore can clear macOS's idle-dim state. **Keep current
+macOS settings** clears recovery without a hardware write when the sensor
+preference already matches. Records are stored in
+`~/Library/Application Support/Nighty Keyboard/`.
 
-**Keep current macOS settings** discards the saved brightness without a hardware
-write, when the automatic-brightness preference already matches. Recovery records
-live in `~/Library/Application Support/Nighty Keyboard/`.
-
-## License
-
-[MIT](LICENSE)
+[Architecture](docs/ARCHITECTURE.md) · [Development](docs/DEVELOPMENT.md) ·
+[Changelog](CHANGELOG.md) · [MIT license](LICENSE)
