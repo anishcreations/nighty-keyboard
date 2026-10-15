@@ -1,45 +1,19 @@
 # Changelog
 
-## Unreleased · 0.0.0 build 10
+## v1.0.0
 
-- Follow macOS idle timeout and resume the saved level on activity.
-- Preserve deeper and steady selections through idle, sleep, lock, and clean relaunches.
-- Read aggregate activity age without monitoring key contents or requesting input access.
-- Stop fade timers while paused; retain the original recovery snapshot.
-- Keep explicit Off and macOS handoff from automatically relighting the keyboard.
-- Gate crash, invalid-record, and preference-storage failures behind recovery.
-- Add 423 regression checks plus fake-device lifecycle and relaunch checks.
-- Simulated closed-panel profile: 153 fade wakeups in 15.04 seconds; actual battery drain remains unmeasured.
-- Physical resume and flicker need user validation.
+- Native menu bar brightness dial with immediate center Off, On, and keyboard navigation.
+- Seven deeper-dimming levels with an explicit level counter, adjustable with the dial or slider.
+- Narrow fade envelopes, timer-drift compensation, and responsive level transitions.
+- Direct steady-to-deeper handoff without restoring and rewriting the previous level.
+- Saved mode and levels across idle, sleep, lock, and clean relaunches.
+- macOS idle timeout with aggregate keyboard, mouse, and trackpad activity.
+- One-shot fade scheduling; fade timers stop while paused.
+- Right-click controls for deeper dimming and macOS handoff at the first regular brightness level.
+- Visible deeper-mode icon, a subtle footer Support link, and an About author credit.
+- Atomic recovery records, verified restoration, and explicit recovery after interrupted sessions.
+- Login option on macOS 13+, universal builds, and build-numbered installers.
+- Free and MIT licensed, with no accounts, time limits, analytics, or input logging.
 
-## 0.0.0 · build 9 — 2026-10-14
-
-- Replaced 50 Hz polling with one-shot fade and readback deadlines.
-- Paused normal observation during deeper mode; scheduled status checks every 500 ms.
-- Allowed scheduling pauses only while estimated light drift stays bounded.
-- Added `--profile-preview`: 154 fade wakeups in 15.04 seconds versus 751 polling ticks.
-- Added build cleanup and build-numbered packaging without duplicate installers.
-
-Validation: 208 device-free checks and native UI checks pass. Actual battery drain
-and hardware-call overhead remain unmeasured.
-
-## 0.0.0 · build 8 — 2026-10-14
-
-- Added seven deeper levels, including four below the previous Deeper target.
-- Narrowed fade envelopes and adapted durations to the selected level.
-- Preserved the current ramp and recovery snapshot when switching levels.
-
-## 0.0.0 · build 7 — 2026-10-14
-
-- Narrowed deeper-mode envelopes and increased fade duration to 10 seconds.
-- Compensated for timer drift and removed the Off restart when changing depth.
-- Added regression checks and trimmed documentation.
-
-User feedback reported reduced pulsing on one Mac. Optical measurements and other
-hardware validation remain pending.
-
-## 0.0.0 · initial source release
-
-- Native dial, presets, deeper mode, and login option.
-- Atomic recovery, delayed restoration checks, and keep-current recovery.
-- Runtime-checked CoreBrightness, guarded HID interfaces, and universal packaging.
+Deeper dimming uses private macOS controls. Physical brightness, flicker, and
+battery drain remain unmeasured; Intel and older macOS targets need hardware validation.

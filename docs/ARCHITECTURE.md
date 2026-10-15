@@ -1,94 +1,65 @@
 # Architecture
 
-Controllers run on the main thread. Swift owns UI and state; Objective-C bridges
-validate runtime signatures and call macOS interfaces.
+Swift/AppKit owns state on the main thread. Objective-C bridges validate runtime
+signatures before calling private macOS interfaces.
 
 ```mermaid
 flowchart LR
-    UI[AppKit panel] --> Steady[BrightnessController]
-    UI --> Host[App lifecycle]
+    Panel --> Host[App lifecycle]
+    Host --> Steady[BrightnessController]
     Host --> Deep[DeepDimmingSession]
-    Steady --> Device[KeyboardDevice]
-    Deep --> Device
-    Device --> Bridge[NativeKeyboard / KeyboardBridge]
+    Host --> Memory[LightingMemory / NativeActivity]
+    Steady --> Bridge[NativeKeyboard / KeyboardBridge]
+    Deep --> Bridge
     Bridge --> OS[CoreBrightness]
-    Steady --> Store[RecoveryStore]
-    Deep --> Store
+    Steady --> Recovery[RecoveryStore]
+    Deep --> Recovery
 ```
 
-## Steady brightness
+## Brightness
 
-`BrightnessController` saves the keyboard ID, brightness, and automatic-brightness
-preference before the first write. It sends one command per selection, checks
-readback, and releases control when macOS changes the level. The dial contains
-Off, eight low requests, and sixteen regular requests.
+Steady mode sends one command per selection and verifies readback. The scale has
+Off, eight low requests, and sixteen regular requests. Dial drags commit on release.
+External macOS changes release Nighty’s control.
 
-`Panel.swift` commits a drag on release. `main.swift` coordinates connection,
-observation, verification, fade ticks, sleep, locking, wake, and termination.
+Deeper mode retargets fades between zero and a near-minimum request. Seven modeled
+fractions are 0.04, 0.06, 0.10, 0.16, 0.25, 0.50, and 0.75. These are not measured
+light output or PWM duty. Envelope half-width is `max(0.0006, target × 0.003)`;
+hold fades last 10–60 seconds. Startup fades to zero first; level transitions
+reach the modeled envelope in about 350 ms.
 
-## Deeper dimming
+One-shot timers follow fade/readback deadlines. Status checks run every 500 ms.
+Retargeting accounts for elapsed time; rejected commands and excessive drift stop
+the session. Steady/deeper transfers retain the original recovery record.
+Off cancels deeper scheduling and sends zero with no fade duration, without first
+restoring a brighter level. The UI shows the selected Off state while readback verifies it.
 
-`DeepDimmingSession` retargets hardware fades between Off and a near-minimum
-request. Its linear-ramp model uses these targets:
+## Activity and persistence
 
-| Level | Setting | Target fraction |
-| --- | --- | --- |
-| 1 | Barely lit | 0.04 |
-| 2 | Very low | 0.06 |
-| 3 | Low | 0.10 |
-| 4 | Dim | 0.16 |
-| 5 | Deeper | 0.25 |
-| 6 | Balanced | 0.50 |
-| 7 | Gentler | 0.75 |
+`NativeActivity` reads aggregate HID idle age, the macOS timeout and idle flag,
+and lock/display/lid state. It records no input contents. Readiness checks run
+every 500 ms; system sleep cancels timers. Wake retries last ten seconds before
+ordinary activity checks continue.
 
-Fractions are model values, not measured PWM duty or light output. The envelope
-half-width is max(0.0006, target × 0.003). Hold fades adapt between 10–60 seconds;
-initial and level-change transitions use four seconds.
+`LightingMemory` stores desired mode, levels, and a clean-exit marker separately
+from the original macOS snapshot. Idle/sleep retain that snapshot. Resume requires
+activity and macOS readiness. Explicit Off/handoff disable resume. Unclean exits,
+invalid records, and failed preference writes require explicit recovery.
 
-One-shot timers follow readback and fade deadlines, with status checks scheduled
-every 500 ms. Normal observation pauses during deeper mode. Retargeting accounts
-for elapsed time and preserves the current ramp when switching depth. Rejected
-commands and excessive drift stop the session; macOS changes hand back control,
-and idle/sleep pause it.
-Intentional Off suppression is allowed; stale commands are never replayed.
+## Handoff and recovery
 
-## Idle, sleep, and preferences
+The menu’s macOS action restores the baseline, requests the first regular level
+(1/16), verifies it, and releases control with the original sensor preference.
+Quit restores original settings; during idle/sleep it returns sensor control and
+retains the brightness record for later recovery.
 
-`LightingMemory` stores a versioned desired mode, both selected levels, and a
-clean-shutdown marker. These preferences are separate from the original macOS
-recovery snapshot. New installs start under macOS control until a mode is enabled.
-
-`NativeActivity` reads aggregate `HIDIdleTime`, the macOS keyboard timeout and idle
-flag, and lock/display/lid state. No input events or key contents are recorded.
-Active status is cached for 500 ms. Paused activity checks run every two seconds;
-system sleep cancels them. A wake retries readiness every 500 ms for ten seconds,
-then leaves the level pending for ordinary activity checks.
-
-Idle pauses ownership without restoring the sensor or overwriting the original
-brightness with zero. Activity resumes the same snapshot and desired level only
-after macOS releases idle suppression. Independent sleep/display/lock reasons
-prevent early resume. Level changes while paused update the saved preference.
-
-A clean relaunch may resume preferences or an owned paused snapshot; startup marks
-the session unclean before any hardware writes. Explicit handoff disables resume.
-Quit returns original settings, or just the sensor while asleep; clean exit is
-recorded only when that cleanup is confirmed. Crashes, unknown data, unavailable
-activity metadata, and failed preference writes never silently restart lighting.
-
-## Recovery
-
-`RecoveryStore` atomically saves `keyboard-session.json` in Application Support.
-A failed save prevents the first hardware write. Restore checks device identity,
-attempts brightness and sensor restoration, and retains the record until readback
-confirms it. Accepted changes can receive delayed confirmation.
-
-Explicit nonzero restoration may clear macOS's idle-dim flag. Fade and sleep
-handlers do not invoke that repair. Keeping current settings clears recovery
-without writes only when the sensor preference matches and no legacy idle-suspension
-restore is pending. Handoff and failure paths release writer connections.
+`RecoveryStore` saves `keyboard-session.json` atomically in Application Support.
+A failed initial save prevents writes. Restore checks keyboard identity and keeps
+the record until brightness and sensor readback confirm success. Explicit nonzero
+restoration may clear the idle-dim flag; fade and sleep handlers never do so.
 
 ## Raw HID
 
-`PWMBridge` requires a recognized descriptor and independent firmware readback
-before attempting a raw report. `PWMSession` saves and verifies that baseline.
-The app's deeper mode uses CoreBrightness, not raw HID or PWM frequency control.
+`PWMBridge` requires a recognized descriptor and firmware readback before writes.
+`PWMSession` retains the verified baseline. Deeper mode uses CoreBrightness;
+it does not control raw HID or PWM frequency.

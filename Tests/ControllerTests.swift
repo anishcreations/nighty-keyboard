@@ -342,6 +342,55 @@ final class FakePWM: PWMDriver {
             d.rejectFades = true
             expect(t.stop() && d.brightnessWrites == [0.4] && t.snapshot == nil, "Normal numeric restoration is available when fade commands fail")
         }
+        do {
+            let (controller, device) = pair()
+            controller.select(3)
+            let before = device.brightnessWrites.count
+            // A restore write would not read back immediately on this device.
+            device.ignoreLevelWrites = true
+            let saved = controller.takeSnapshotForDeeperMode()
+            expect(saved?.brightness == 0.4 && controller.snapshot == nil && !controller.verificationPending,
+                   "Mode transfer preserves baseline and cancels pending steady verification")
+            expect(device.brightnessWrites.count == before && !device.automatic,
+                   "Enabling deeper mode does not restore the old brightness or sensor first")
+            let session = DeepDimmingSession(device: device)
+            expect(session.adopt(saved!) && session.resume(at: 0, allowAutomaticDisable: true),
+                   "Transferred settings start deeper mode without a restore round trip")
+            device.ignoreLevelWrites = false
+            expect(session.stop() && device.brightness == 0.4 && device.automatic,
+                   "Transferred session restores the original settings")
+        }
+        do {
+            let device = FakeKeyboard(); device.suppressionFollowsOff = true
+            let session = DeepDimmingSession(device: device)
+            _ = session.start(at: 0)
+            let before = device.fades.count
+            let saved = session.takeSnapshotForSteadyMode()!
+            let controller = BrightnessController()
+            expect(controller.adoptForResume(saved, device: device), "Off handoff adopts the original recovery baseline")
+            controller.select(0)
+            expect(!session.running && session.nextWakeTime == nil && session.snapshot == nil,
+                   "Off cancels the deeper scheduler immediately")
+            expect(device.fades.count == before + 1 && device.fades.last?.0 == 0 && device.fades.last?.1 == 0,
+                   "Off sends one zero-duration command without restoring the previous level")
+            expect(controller.selectedIndex == 0 && controller.verificationPending && controller.snapshot?.brightness == 0.4,
+                   "Off selection is immediate while confirmation and recovery remain intact")
+            controller.verifySelection()
+            expect(controller.selectedIndex == 0 && device.brightness == 0, "Off confirms zero brightness")
+        }
+        for destination in DeepDimmingSession.Depth.allCases {
+            let device = FakeKeyboard(); let session = DeepDimmingSession(device: device)
+            _ = session.start(at: 0)
+            var clock = 0.0
+            while let next = session.nextWakeTime, next < 2 { clock = next; session.tick(at: clock) }
+            clock = 2; session.tick(at: clock)
+            session.selectDepth(destination, at: clock)
+            while let next = session.nextWakeTime, next <= 2.4 { clock = next; session.tick(at: clock) }
+            let value = session.modeledFraction(at: 2.4) ?? -1
+            expect(session.running && abs(value - destination.center) < 0.015,
+                   "Each requested depth reaches its modeled envelope within 400 ms")
+            _ = session.stop()
+        }
         for depth in DeepDimmingSession.Depth.allCases {
             let d = FakeKeyboard(); let t = DeepDimmingSession(device: d)
             t.selectDepth(depth, at: 0); _ = t.start(at: 0)
@@ -405,7 +454,7 @@ final class FakePWM: PWMDriver {
                    "Modeled steady light stays near its selected narrow envelope")
             let writes = d.fades.count
             t.selectDepth(depth == .deepest ? .gentler : .deepest, at: 120)
-            expect(d.fades.count == writes + 1 && d.fades.last?.1 == DeepDimmingSession.transitionMilliseconds,
+            expect(d.fades.count == writes + 1 && d.fades.last!.1 >= 100 && d.fades.last!.1 <= 60_000,
                    "Depth change uses a continuous transition without a startup blackout")
             expect(t.stop(), "Narrow-envelope session restores settings")
         }
@@ -466,10 +515,7 @@ final class FakePWM: PWMDriver {
         }
         do {
             let d = FakeKeyboard(); let t = DeepDimmingSession(device: d); _ = t.start(at: 0)
-            t.tick(at: 0.08); t.tick(at: 0.5); t.tick(at: 0.7)
-            t.tick(at: t.nextWakeTime!)
-            t.tick(at: 2.706) // Finish the four-second transition to the Balanced envelope.
-            t.tick(at: t.nextWakeTime!)
+            while let next = t.nextWakeTime, next < 2 { t.tick(at: next) }
             let due = t.nextWakeTime!; t.tick(at: due + 0.07)
             expect(t.running, "Small delivery pause is tolerated when long-fade drift stays bounded")
             t.tick(at: t.nextWakeTime! + 2)

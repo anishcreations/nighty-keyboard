@@ -103,6 +103,10 @@ final class BrightnessController {
 
     func select(_ index: Int) {
         guard let device = device, state != .sleeping else { return }
+        if index == 0 && device.brightness == 0 && device.idleDimmed {
+            selectedIndex = 0; observedBrightness = 0; verificationPending = false
+            state = .controlling; message = "Keyboard light off."; notify(); return
+        }
         guard !device.idleDimmed && (!device.suppressed || device.brightness == 0) else {
             message = "macOS has the keyboard off. Wake it to adjust your level."; notify(); return
         }
@@ -122,7 +126,10 @@ final class BrightnessController {
             rollback("Could not disable automatic brightness."); return
         }
         // A single direct command per selection. No dim/off pulse loop.
-        guard device.setBrightness(BrightnessScale.levels[index]) else {
+        let applied = index == 0 && device.supportsFades
+            ? device.setFade(0, milliseconds: 0)
+            : device.setBrightness(BrightnessScale.levels[index])
+        guard applied else {
             rollback("The keyboard rejected this brightness level."); return
         }
         selectedIndex = index
@@ -281,6 +288,15 @@ final class BrightnessController {
               (0...1).contains(saved.brightness), saved.idleDimmingSuspended == nil else { return false }
         self.device = device; snapshot = saved; state = .paused; recoveryStaged = false
         return true
+    }
+    /// Move ownership to the fade session without restoring and rewriting hardware.
+    /// The existing recovery record remains on disk throughout the transfer.
+    func takeSnapshotForDeeperMode() -> Snapshot? {
+        guard state != .failed, !restorationPending, !recoveryStaged,
+              let saved = snapshot, saved.idleDimmingSuspended == nil else { return nil }
+        snapshot = nil; verificationPending = false; pendingIndex = nil
+        device?.releaseControl(); state = .paused
+        return saved
     }
     func requireRecovery(_ reason: String) { fail(reason) }
     func pauseRememberedLevel() {

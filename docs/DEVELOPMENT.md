@@ -26,7 +26,7 @@ installers, and moves diagnostic records to ignored `.local-diagnostics/`.
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --verify-ui
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --verify-lifecycle
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --profile-preview
-"build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --render-preview /tmp/nighty.png
+"build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --render-preview /tmp/nighty.png --preview-deep
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --render-preview /tmp/nighty-idle.png --preview-idle
 ```
 

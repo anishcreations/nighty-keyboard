@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var restReasons = Set<String>()
     var persistenceReady = false
     var resumeAllowsAutomaticDisable = false
+    var minimumHandoffPending = false
     var cleanExitPrepared = false
     var hasConnected = false
     var cachedActivity: (TimeInterval, ActivitySnapshot)?
@@ -82,25 +83,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         panel.onRetry = { [weak self] in self?.connect() }
         panel.onDeepDimming = { [weak self] in self?.toggleDeepDimming() }
         panel.onDepthChanged = { [weak self] index in
-            guard let self = self, let depth = DeepDimmingSession.Depth(rawValue: index) else { return }
+            guard let self = self, let depth = DeepDimmingSession.Depth(rawValue: index), self.selectedDepth != depth else { return }
             guard self.memory.rememberDepth(index) else { return }
             self.selectedDepth = depth
+            self.cachedActivity = nil
             self.deepSession?.selectDepth(depth, at: ProcessInfo.processInfo.systemUptime)
             if self.deepSession?.isPaused == true { self.pauseLighting() }
             else if self.deepSession?.running == false { self.finishDeepDimming() }
             else if self.deepSession?.running == true { self.scheduleNextFadeTick() }
-            self.panel.update()
+            self.pollLighting(); self.updateRememberedUI()
         }
         panel.onDeepOff = { [weak self] in
             self?.selectSteady(0)
         }
+        panel.onSupport = { [weak self] in self?.openSupport() }
         panel.onQuit = { NSApp.terminate(nil) }
         controller.onChange = { [weak self] in
             if self?.deepSession == nil { self?.panel.deepMessage = nil }
             self?.panel.update()
             self?.verificationWork?.cancel()
             if self?.controller.restorationPending == true {
-                let work = DispatchWorkItem { [weak self] in self?.controller.verifyRestoration() }
+                let work = DispatchWorkItem { [weak self] in self?.controller.verifyRestoration(); self?.continueMinimumHandoff() }
                 self?.verificationWork = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
             } else if self?.controller.verificationPending == true {
@@ -113,8 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = keycapIcon()
         item.button?.toolTip = "Nighty Keyboard · keyboard backlight"
-        item.button?.target = self; item.button?.action = #selector(togglePanel)
-        popover.contentViewController = panel; popover.contentSize = NSSize(width: 360, height: 648)
+        item.button?.target = self; item.button?.action = #selector(statusItemClicked)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        popover.contentViewController = panel; popover.contentSize = NSSize(width: 360, height: 510)
         popover.behavior = .transient; popover.animates = false; popover.delegate = self
         if preview {
             showPreview()
@@ -182,16 +186,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         updateRememberedUI()
     }
     func toggleDeepDimming() {
+        minimumHandoffPending = false
         if memory.enabled && memory.state != .failed && memory.preferences.mode == .deep { returnToMacOS(); return }
         cachedActivity = nil
-        guard persistenceReady, controller.restore(), memory.select(.deep, depth: selectedDepth.rawValue) else { return }
+        guard persistenceReady, !controller.recoveryStaged, !controller.restorationPending,
+              controller.state != .failed, let device = connectedDevice else { return }
+        guard controller.snapshot?.idleDimmingSuspended == nil,
+              memory.select(.deep, depth: selectedDepth.rawValue) else { return }
+        if let saved = controller.takeSnapshotForDeeperMode() {
+            let session = DeepDimmingSession(device: device)
+            session.saveRecovery = preview ? nil : { [weak self] in self?.recovery.save($0) ?? false }
+            guard session.adopt(saved) else { _ = controller.stageRecovery(saved, device: device); memory.fail(); updateRememberedUI(); return }
+            session.selectDepth(selectedDepth, at: ProcessInfo.processInfo.systemUptime)
+            deepSession = session
+        }
+        verificationWork?.cancel()
         resumeAllowsAutomaticDisable = true
         pollLighting()
+        startObservation()
     }
     func selectSteady(_ index: Int) {
+        minimumHandoffPending = false
         guard controller.state != .failed && !controller.restorationPending else { return }
         cachedActivity = nil
         guard persistenceReady else { return }
+        if index == 0, let session = deepSession, let device = connectedDevice {
+            guard memory.select(.system, index: 0) else { return }
+            fadeTimer?.invalidate(); fadeTimer = nil; verificationWork?.cancel()
+            guard let saved = session.takeSnapshotForSteadyMode(), controller.adoptForResume(saved, device: device) else {
+                memory.fail(); updateRememberedUI(); return
+            }
+            deepSession = nil; panel.deepMessage = nil
+            controller.select(0); updateRememberedUI(); startObservation(); return
+        }
         if deepSession != nil { returnToMacOS(); if controller.snapshot != nil { return } }
         guard memory.select(index == 0 ? .system : .steady, index: index) else { return }
         if index == 0 { controller.select(0); updateRememberedUI(); return }
@@ -199,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         pollLighting()
     }
     func returnToMacOS() {
+        minimumHandoffPending = false
         if arguments.contains("--profile-preview") { print("PROFILE_EVENT: explicit handoff") }
         guard memory.select(.system) else { return }
         if let session = deepSession { _ = session.stop(); finishDeepDimming() }
@@ -223,8 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             panel.pausedMessage = "Automatic resume is off after an interrupted session. Choose a level to continue."
             panel.statusTitleOverride = "Choose a level to continue"
         } else if memory.paused {
-            panel.pausedMessage = memory.state == .sleepPaused ? "Sleeping. Your level will resume when you return." :
-                memory.state == .waiting ? "Waiting for macOS and activity. Your level is saved." : "Paused while idle. Your level is saved."
+            panel.pausedMessage = memory.state == .sleepPaused ? "Paused during sleep." :
+                memory.state == .waiting ? "Waiting for the keyboard to wake…" : "Paused while idle. Your level is saved."
         } else { panel.pausedMessage = nil }
         panel.update()
     }
@@ -251,6 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if !restReasons.isEmpty { pauseLighting(sleeping: true); return }
         guard memory.enabled else {
             if popover.isShown { controller.refresh() } else { controller.observe() }
+            continueMinimumHandoff()
             return
         }
         guard memory.state != .failed else { updateRememberedUI(); return }
@@ -265,7 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             return
         }
         guard let device = connectedDevice else { memory.wait(); return }
-        if device.idleDimmed || (device.suppressed && device.brightness > 0) {
+        if device.idleDimmed || (device.suppressed && device.brightness > 0 && deepSession?.running != true) {
             pauseLighting(); memory.wait(); updateRememberedUI(); return
         }
         if memory.shouldResume(status) {
@@ -301,6 +330,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func verifyRememberedSelection() {
         if memory.enabled && activity().decision != .active { pauseLighting(); return }
         controller.verifySelection()
+        continueMinimumHandoff()
         if memory.preferences.mode == .steady && !controller.isControlling { _ = memory.select(.system) }
         updateRememberedUI()
     }
@@ -324,13 +354,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         fadeTimer = timer; RunLoop.main.add(timer, forMode: .common)
     }
     func startObservation() {
-        guard !preview, restReasons.isEmpty else { return }
+        guard !preview, restReasons.isEmpty, deepSession?.running != true else { return }
         if observation?.isValid == true { return }
         observation?.invalidate()
-        observation = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+        observation = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.pollLighting()
         }
-        observation?.tolerance = 0.4
+        observation?.tolerance = 0.05
+        if let observation = observation { RunLoop.main.add(observation, forMode: .common) }
     }
     func finishDeepDimming() {
         guard let trial = deepSession else { return }
@@ -344,6 +375,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         deepSession = nil; panel.deepRunning = false; panel.deepMessage = message; panel.update()
         startObservation()
     }
+
+    @objc func statusItemClicked() {
+        if NSApp.currentEvent?.type == .rightMouseUp || NSApp.currentEvent?.modifierFlags.contains(.control) == true {
+            popover.performClose(nil)
+            let menu = makeStatusMenu()
+            item.menu = menu; item.button?.performClick(nil); item.menu = nil
+        } else { togglePanel() }
+    }
+    func makeStatusMenu() -> NSMenu {
+        let menu = NSMenu(); menu.autoenablesItems = false
+        let deep = NSMenuItem(title: "Deeper dimming", action: #selector(toggleDeepFromMenu), keyEquivalent: "")
+        deep.target = self; deep.state = memory.enabled && memory.preferences.mode == .deep ? .on : .off
+        deep.isEnabled = persistenceReady && connectedDevice != nil && !controller.recoveryStaged && !controller.restorationPending
+        menu.addItem(deep)
+        let system = NSMenuItem(title: "Use macOS settings", action: #selector(useMacOSFromMenu), keyEquivalent: "")
+        system.target = self; menu.addItem(system)
+        menu.addItem(.separator())
+        let support = NSMenuItem(title: "Support Nighty…", action: #selector(openSupport), keyEquivalent: "")
+        support.target = self; menu.addItem(support)
+        let quit = NSMenuItem(title: "Quit Nighty", action: #selector(quitFromMenu), keyEquivalent: "q")
+        quit.target = self; menu.addItem(quit)
+        return menu
+    }
+    @objc func toggleDeepFromMenu() { toggleDeepDimming() }
+    @objc func useMacOSFromMenu() {
+        returnToMacOS()
+        minimumHandoffPending = true
+        continueMinimumHandoff()
+    }
+    func continueMinimumHandoff() {
+        guard minimumHandoffPending, !controller.restorationPending, !controller.verificationPending else { return }
+        guard controller.state != .failed, controller.state != .unavailable,
+              restReasons.isEmpty, let device = connectedDevice, !device.idleDimmed else {
+            minimumHandoffPending = false; return
+        }
+        if controller.isControlling {
+            minimumHandoffPending = false
+            _ = controller.yieldToMacOS()
+        } else if controller.snapshot == nil {
+            controller.select(BrightnessScale.nightRange.upperBound + 1)
+            if !controller.verificationPending { minimumHandoffPending = false }
+        }
+        updateRememberedUI()
+    }
+    @objc func openSupport() { if let url = URL(string: "https://anisharyal09.com.np/support?from=nighty-kb") { NSWorkspace.shared.open(url) } }
+    @objc func quitFromMenu() { NSApp.terminate(nil) }
 
     @objc func togglePanel() {
         if popover.isShown { popover.performClose(nil); return }
@@ -439,10 +516,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         guard preview, let device = connectedDevice as? PreviewKeyboard else { return ["Lifecycle test requires a fake keyboard"] }
         var failures: [String] = []
         func check(_ condition: Bool, _ message: String) { if !condition { failures.append(message) } }
-        returnToMacOS(); selectedDepth = .barely; _ = memory.rememberDepth(selectedDepth.rawValue)
+        returnToMacOS()
+        useMacOSFromMenu(); verifyRememberedSelection()
+        check(!memory.enabled && controller.snapshot == nil && !controller.isControlling && !minimumHandoffPending,
+              "macOS minimum handoff retained Nighty control")
+        check(device.brightness == BrightnessScale.levels[9], "macOS handoff did not select the first regular level")
+        selectedDepth = .barely; _ = memory.rememberDepth(selectedDepth.rawValue)
         panel.setDepthSelection(selectedDepth.rawValue)
         toggleDeepDimming()
         let original = deepSession?.snapshot?.brightness
+        check(makeStatusMenu().items.first?.state == .on, "Right-click menu did not reflect deeper mode")
+        check(makeStatusMenu().items.contains(where: { $0.action == #selector(openSupport) }), "Right-click menu omitted support")
         let session = deepSession
         check(memory.state == .active && session?.depth == .barely, "Saved depth did not activate")
         for _ in 0..<3 {
@@ -508,10 +592,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     func showPreview() {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 648), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 510), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Nighty Keyboard · Preview (no hardware changes)"
         window.contentViewController = panel; window.center(); window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true); previewWindow = window
+        if arguments.contains("--preview-deep") { toggleDeepDimming() }
         if arguments.contains("--preview-idle"), let device = connectedDevice as? PreviewKeyboard {
             toggleDeepDimming(); device.brightness = 0; device.idleDimmed = true
             previewActivity = ActivitySnapshot(age: 20, timeout: 10, keyboardIdle: true); pollLighting()
@@ -542,7 +627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if arguments.contains("--verify-ui") {
             DispatchQueue.main.async {
                 let failures = self.panel.validatePreview()
-                if failures.isEmpty { print("PASS: Native panel bounds, accessibility dial actions, presets, continuous dimming, Off, and Use macOS; fake keyboard only.") }
+                if failures.isEmpty { print("PASS: Native panel bounds, accessibility dial actions, center power, deeper dimming, and recovery; fake keyboard only.") }
                 else { failures.forEach { print("FAIL: " + $0) } }
                 exit(failures.isEmpty ? 0 : 1)
             }
@@ -575,6 +660,6 @@ if arguments.contains("--diagnose-pwm") {
 }
 
 let app = NSApplication.shared
-let delegate = AppDelegate(preview: arguments.contains("--preview") || arguments.contains("--render-preview") || arguments.contains("--verify-ui") || arguments.contains("--profile-preview") || arguments.contains("--verify-lifecycle") || arguments.contains("--preview-idle"))
+let delegate = AppDelegate(preview: arguments.contains("--preview") || arguments.contains("--render-preview") || arguments.contains("--verify-ui") || arguments.contains("--profile-preview") || arguments.contains("--verify-lifecycle") || arguments.contains("--preview-idle") || arguments.contains("--preview-deep"))
 app.delegate = delegate
 app.run()

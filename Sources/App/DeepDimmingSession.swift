@@ -4,7 +4,7 @@ import Foundation
 /// The envelope is a model of a linear ramp; it is NOT measured optical brightness.
 final class DeepDimmingSession {
     static let floorRequest: Float = 0.0001
-    static let transitionMilliseconds = 4_000
+    static let transitionMilliseconds = 350
     private let device: KeyboardDevice
     private(set) var snapshot: BrightnessController.Snapshot?
     private(set) var running = false
@@ -72,7 +72,7 @@ final class DeepDimmingSession {
         nextStatusCheck = now + 0.5
         // Establish Off with a smooth ramp before entering the nominal subminimum envelope.
         guard command(0, duration: 600, at: now, next: 0.7) else { return false }
-        message = "Your deeper level is active. Idle and sleep pause it automatically."
+        message = "Deeper dimming on."
         return true
     }
 
@@ -126,7 +126,12 @@ final class DeepDimmingSession {
         let current = ramp?.value(at: now) ?? 0
         let endpoint: Double = up ? 1 : 0
         let boundary = up ? upper : lower
-        let milliseconds = transitioning ? Self.transitionMilliseconds : depth.rampMilliseconds
+        let distance = abs(boundary - current)
+        // Reach the selected envelope in a fixed short time, rather than using
+        // a fixed endpoint fade whose visible transition depends on the level.
+        let milliseconds = transitioning
+            ? min(60_000, max(100, Int(ceil(Double(Self.transitionMilliseconds) * abs(endpoint - current) / max(0.000001, distance)))))
+            : depth.rampMilliseconds
         let seconds = Double(milliseconds) / 1000
         // Compensate for elapsed scheduling time instead of assuming that the last
         // correction landed exactly at the nominal lower/upper bound.
@@ -151,6 +156,14 @@ final class DeepDimmingSession {
         message = "Paused while idle. Your level is remembered."
     }
 
+    /// Transfer the existing baseline without briefly restoring a brighter level.
+    func takeSnapshotForSteadyMode() -> BrightnessController.Snapshot? {
+        guard let saved = snapshot else { return nil }
+        running = false; isPaused = false; awaitingReadback = false
+        device.releaseControl(); snapshot = nil
+        return saved
+    }
+
     func adopt(_ saved: BrightnessController.Snapshot) -> Bool {
         guard snapshot == nil, saved.keyboardID == device.id, saved.brightness.isFinite,
               (0...1).contains(saved.brightness), saved.idleDimmingSuspended == nil else { return false }
@@ -169,7 +182,7 @@ final class DeepDimmingSession {
             initialized = true; ramp = FadeRamp(value: 0, target: 0, started: now, duration: 0)
             issueRamp(up: true, at: now, transitioning: true)
         } else if !command(0, duration: 600, at: now, next: 0.7) { return false }
-        message = "Your remembered deeper level is active."; return running
+        message = "Deeper dimming on."; return running
     }
 
     @discardableResult func stop(reason: String = "Deeper dimming stopped.", preserveCurrent: Bool = false) -> Bool {

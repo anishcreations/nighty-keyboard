@@ -33,6 +33,7 @@ private final class LightDial: NSControl {
         super.init(frame: frameRect); cell = NSActionCell(); cell?.isEnabled = true
     }
     required init?(coder: NSCoder) { super.init(coder: coder) }
+    var maximumIndex = BrightnessScale.levels.count - 1
     var selectedIndex = 0 { didSet { needsDisplay = true } }
     var modeTitle: String?
     var captionOverride: String?
@@ -65,10 +66,10 @@ private final class LightDial: NSControl {
         Ink.surface.withAlphaComponent(enabledAlpha).setFill()
         NSBezierPath(ovalIn: NSRect(x: center.x - 77, y: center.y - 77, width: 154, height: 154)).fill()
         arc(1, radius: radius, color: Ink.line, width: 5)
-        let fraction = CGFloat(selectedIndex) / CGFloat(BrightnessScale.levels.count - 1)
+        let fraction = CGFloat(selectedIndex) / CGFloat(maximumIndex)
         if selectedIndex > 0 { arc(fraction, radius: radius, color: Ink.accent.withAlphaComponent(enabledAlpha), width: 5) }
-        for index in BrightnessScale.levels.indices {
-            let angle = start + sweep * CGFloat(index) / CGFloat(BrightnessScale.levels.count - 1)
+        for index in 0...maximumIndex {
+            let angle = start + sweep * CGFloat(index) / CGFloat(maximumIndex)
             let tick = NSBezierPath(); tick.move(to: point(angle, radius: 102)); tick.line(to: point(angle, radius: index % 4 == 0 ? 110 : 106))
             (index <= selectedIndex ? Ink.accent.withAlphaComponent(0.8 * enabledAlpha) : Ink.line).setStroke()
             tick.lineWidth = 1.5; tick.stroke()
@@ -77,23 +78,23 @@ private final class LightDial: NSControl {
         Ink.background.setFill(); NSBezierPath(ovalIn: NSRect(x: thumb.x - 10, y: thumb.y - 10, width: 20, height: 20)).fill()
         Ink.accent.withAlphaComponent(enabledAlpha).setFill()
         NSBezierPath(ovalIn: NSRect(x: thumb.x - 6, y: thumb.y - 6, width: 12, height: 12)).fill()
-        let isNight = externalValue == nil && BrightnessScale.nightRange.contains(selectedIndex)
+        let isNight = modeTitle == nil && externalValue == nil && BrightnessScale.nightRange.contains(selectedIndex)
         let number = modeTitle ?? externalValue.map { BrightnessScale.percentage(of: $0) } ?? (selectedIndex == 0 ? "Off" : isNight ? String(selectedIndex) : BrightnessScale.percent(selectedIndex))
         let font = NSFont.monospacedDigitSystemFont(ofSize: isNight ? 52 : 33, weight: .light)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Ink.primary.withAlphaComponent(enabledAlpha)]
         let textSize = (number as NSString).size(withAttributes: attributes)
-        (number as NSString).draw(at: NSPoint(x: center.x - textSize.width / 2, y: center.y - textSize.height / 2 - 9), withAttributes: attributes)
-        let caption = captionOverride ?? (modeTitle != nil ? "HARDWARE FADES" : externalValue != nil ? "MACOS LEVEL" : isNight ? "NIGHT LEVEL" : "KEYBOARD LIGHT")
+        (number as NSString).draw(at: NSPoint(x: center.x - textSize.width / 2, y: center.y - textSize.height / 2 - 24), withAttributes: attributes)
+        let caption = captionOverride ?? (modeTitle != nil ? "DEEPER" : externalValue != nil ? "MACOS LEVEL" : isNight ? "NIGHT LEVEL" : "KEYBOARD LIGHT")
         let small: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9, weight: .medium), .foregroundColor: Ink.muted]
         let captionSize = (caption as NSString).size(withAttributes: small)
-        (caption as NSString).draw(at: NSPoint(x: center.x - captionSize.width / 2, y: center.y + 26), withAttributes: small)
+        (caption as NSString).draw(at: NSPoint(x: center.x - captionSize.width / 2, y: center.y + 4), withAttributes: small)
     }
     private func index(at location: NSPoint) -> Int {
         var angle = atan2(location.y - center.y, location.x - center.x) * 180 / .pi
         if angle < start { angle += 360 }
         if angle > start + sweep { angle = angle < start + sweep + 45 ? start + sweep : start }
         let fraction = max(0, min(1, (angle - start) / sweep))
-        return BrightnessScale.clampedIndex(Int((fraction * CGFloat(BrightnessScale.levels.count - 1)).rounded()))
+        return max(0, min(maximumIndex, Int((fraction * CGFloat(maximumIndex)).rounded())))
     }
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
@@ -113,7 +114,7 @@ private final class LightDial: NSControl {
     private func step(_ direction: Int) {
         guard isEnabled else { return }
         externalValue = nil
-        selectedIndex = BrightnessScale.clampedIndex(selectedIndex + direction)
+        selectedIndex = max(0, min(maximumIndex, selectedIndex + direction))
         _ = sendAction(action, to: target)
     }
     override func keyDown(with event: NSEvent) {
@@ -134,6 +135,7 @@ final class PanelController: NSViewController {
     let controller: BrightnessController
     var onRetry: (() -> Void)?
     var onQuit: (() -> Void)?
+    var onSupport: (() -> Void)?
     var onSteadySelection: ((Int) -> Void)?
     var onUseMacOS: (() -> Void)?
     var onKeepCurrent: (() -> Void)?
@@ -149,54 +151,63 @@ final class PanelController: NSViewController {
     private let depths = NSSlider(value: Double(DeepDimmingSession.Depth.balanced.rawValue), minValue: 0, maxValue: Double(DeepDimmingSession.Depth.allCases.count - 1), target: nil, action: nil)
     private let keepCurrentButton = NSButton(title: "Keep current macOS settings", target: nil, action: nil)
     private let deepButton = NSButton(title: "Enable deeper dimming", target: nil, action: nil)
-    private let dial = LightDial(frame: NSRect(x: 64, y: 98, width: 232, height: 232))
+    private let dial = LightDial(frame: NSRect(x: 64, y: 70, width: 232, height: 232))
     private let detail = NSTextField(labelWithString: "")
-    private let stateTitle = NSTextField(labelWithString: "macOS has control")
     private let message = NSTextField(wrappingLabelWithString: "")
     private let returnButton = NSButton(title: "Use macOS", target: nil, action: nil)
     private let offButton = NSButton(title: "Off", target: nil, action: nil)
     private let login = NSButton(checkboxWithTitle: "Open at login", target: nil, action: nil)
-    private var presets: [NSButton] = []
     init(controller: BrightnessController) { self.controller = controller; super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("Not supported") }
 
     override func loadView() {
-        view = PanelBackground(frame: NSRect(x: 0, y: 0, width: 360, height: 648))
+        view = PanelBackground(frame: NSRect(x: 0, y: 0, width: 360, height: 510))
         view.appearance = NSAppearance(named: .darkAqua)
         let brand = label("Nighty", NSRect(x: 24, y: 24, width: 250, height: 39), size: 30)
-        brand.font = NSFont(name: "Georgia", size: 30) ?? .systemFont(ofSize: 30, weight: .semibold)
-        label("KEYBOARD LIGHT, AT YOUR PACE", NSRect(x: 25, y: 68, width: 285, height: 15), size: 9, weight: .medium, color: Ink.muted)
+        brand.font = .systemFont(ofSize: 25, weight: .semibold)
         let info = button("About", frame: NSRect(x: 285, y: 29, width: 52, height: 27), action: #selector(showInfo), filled: false)
         info.font = .systemFont(ofSize: 11)
         dial.target = self; dial.action = #selector(dialChanged)
-        dial.onPreview = { [weak self] index in self?.showDetail(index) }
-        view.addSubview(dial)
-        detail.frame = NSRect(x: 24, y: 329, width: 312, height: 20)
-        detail.font = .systemFont(ofSize: 11); detail.textColor = Ink.muted; detail.alignment = .center; view.addSubview(detail)
-        for (i, item) in [("Low", 5), ("Work", 10), ("Bright", 18)].enumerated() {
-            let preset = button(item.0, frame: NSRect(x: 24 + i * 107, y: 365, width: 98, height: 36), action: #selector(presetSelected(_:)))
-            preset.tag = item.1; presets.append(preset)
+        dial.onPreview = { [weak self] index in
+            guard let self = self else { return }
+            if self.deepRunning { self.dial.modeTitle = "\(index + 1)/7"; self.detail.stringValue = DeepDimmingSession.Depth(rawValue: index)?.title ?? "" }
+            else { self.showDetail(index) }
         }
-        style(deepButton, frame: NSRect(x: 24, y: 413, width: 312, height: 32), action: #selector(deepSession))
-        deepButton.font = .systemFont(ofSize: 11)
-        style(keepCurrentButton, frame: NSRect(x: 24, y: 454, width: 312, height: 28), action: #selector(keepCurrent))
+        view.addSubview(dial)
+        detail.frame = NSRect(x: 24, y: 307, width: 312, height: 20)
+        detail.font = .systemFont(ofSize: 11); detail.textColor = Ink.muted; detail.alignment = .center; view.addSubview(detail)
+        style(offButton, frame: NSRect(x: 135, y: 220, width: 90, height: 27), action: #selector(togglePower), filled: false)
+        offButton.font = .systemFont(ofSize: 11, weight: .medium)
+        deepButton.setButtonType(.switch)
+        deepButton.frame = NSRect(x: 50, y: 344, width: 286, height: 26)
+        deepButton.target = self; deepButton.action = #selector(deepSession)
+        deepButton.font = .systemFont(ofSize: 12, weight: .medium)
+        deepButton.contentTintColor = Ink.accent
+        let moon = NSImageView(frame: NSRect(x: 24, y: 349, width: 16, height: 16))
+        moon.image = NSImage(systemSymbolName: "moon.fill", accessibilityDescription: nil)
+        moon.contentTintColor = Ink.accent; view.addSubview(moon)
+        deepButton.toolTip = "Enable or disable deeper dimming"
+        view.addSubview(deepButton)
+        style(returnButton, frame: NSRect(x: 24, y: 378, width: 312, height: 28), action: #selector(restore))
+        style(keepCurrentButton, frame: NSRect(x: 24, y: 410, width: 312, height: 26), action: #selector(keepCurrent), filled: false)
         keepCurrentButton.font = .systemFont(ofSize: 11)
-        depths.frame = NSRect(x: 24, y: 450, width: 312, height: 26)
-        depths.integerValue = DeepDimmingSession.Depth.balanced.rawValue; depths.numberOfTickMarks = DeepDimmingSession.Depth.allCases.count; depths.allowsTickMarkValuesOnly = true; depths.isContinuous = false; depths.setAccessibilityLabel("Deeper dimming level, 1 darkest to 7 brightest"); depths.target = self; depths.action = #selector(depthChanged); view.addSubview(depths)
-        depthCaption.frame = NSRect(x: 24, y: 480, width: 312, height: 16)
+        depths.frame = NSRect(x: 24, y: 378, width: 312, height: 26)
+        depths.integerValue = DeepDimmingSession.Depth.balanced.rawValue; depths.numberOfTickMarks = DeepDimmingSession.Depth.allCases.count; depths.allowsTickMarkValuesOnly = true; depths.isContinuous = true; depths.setAccessibilityLabel("Deeper dimming level, 1 darkest to 7 brightest"); depths.target = self; depths.action = #selector(depthChanged); view.addSubview(depths)
+        depthCaption.frame = NSRect(x: 24, y: 410, width: 312, height: 16)
         depthCaption.font = .systemFont(ofSize: 10); depthCaption.textColor = Ink.muted; depthCaption.alignment = .center; view.addSubview(depthCaption)
-        let status = NSView(frame: NSRect(x: 24, y: 501, width: 312, height: 72))
-        status.wantsLayer = true; status.layer?.backgroundColor = Ink.surface.cgColor; status.layer?.cornerRadius = 14; view.addSubview(status)
-        stateTitle.frame = NSRect(x: 39, y: 513, width: 281, height: 20)
-        stateTitle.font = .systemFont(ofSize: 12, weight: .semibold); stateTitle.textColor = Ink.primary; view.addSubview(stateTitle)
-        message.frame = NSRect(x: 39, y: 537, width: 281, height: 29)
-        message.font = .systemFont(ofSize: 11); message.textColor = Ink.muted; message.maximumNumberOfLines = 2; view.addSubview(message)
-        style(returnButton, frame: NSRect(x: 24, y: 585, width: 215, height: 36), action: #selector(restore), primary: true)
-        style(offButton, frame: NSRect(x: 249, y: 585, width: 87, height: 36), action: #selector(turnOff))
-        login.frame = NSRect(x: 24, y: 627, width: 145, height: 18); login.font = .systemFont(ofSize: 10)
+        message.frame = NSRect(x: 24, y: 441, width: 312, height: 31)
+        message.font = .systemFont(ofSize: 11); message.textColor = Ink.muted
+        message.maximumNumberOfLines = 2; view.addSubview(message)
+        login.frame = NSRect(x: 24, y: 482, width: 145, height: 18); login.font = .systemFont(ofSize: 10)
         login.target = self; login.action = #selector(toggleLogin); view.addSubview(login)
         if #available(macOS 13, *) { refreshLogin() } else { login.isHidden = true }
-        let quit = button("Quit", frame: NSRect(x: 287, y: 622, width: 51, height: 25), action: #selector(quitApp), filled: false)
+        let support = button("", frame: NSRect(x: 237, y: 477, width: 30, height: 25), action: #selector(supportApp), filled: false)
+        support.image = NSImage(systemSymbolName: "heart.fill", accessibilityDescription: "Support Nighty")
+        support.imageScaling = .scaleProportionallyDown
+        support.contentTintColor = Ink.primary.withAlphaComponent(0.45)
+        support.toolTip = "Support me <3"
+        support.setAccessibilityLabel("Support me")
+        let quit = button("Quit", frame: NSRect(x: 287, y: 477, width: 51, height: 25), action: #selector(quitApp), filled: false)
         quit.font = .systemFont(ofSize: 10)
         update()
     }
@@ -207,38 +218,46 @@ final class PanelController: NSViewController {
             dial.selectedIndex = rememberedSteadyIndex ?? controller.selectedIndex; showDetail(dial.selectedIndex)
             if rememberedSteadyIndex != nil { dial.externalValue = nil }
         }
+        dial.maximumIndex = deepRunning ? DeepDimmingSession.Depth.allCases.count - 1 : BrightnessScale.levels.count - 1
+        if deepRunning && !dial.tracking { dial.selectedIndex = depths.integerValue; dial.externalValue = nil }
         dial.captionOverride = pausedMessage == nil ? nil : "SAVED LEVEL"
-        dial.modeTitle = deepRunning ? "Deep \(depths.integerValue + 1)" : nil
+        dial.modeTitle = deepRunning ? "\(depths.integerValue + 1)/7" : nil
         if let depth = DeepDimmingSession.Depth(rawValue: depths.integerValue) {
-            depthCaption.stringValue = "Level \(depth.rawValue + 1) / 7 · " + depth.title + " · left is dimmer"
-            if deepRunning { detail.stringValue = "Deep \(depth.rawValue + 1) · " + depth.title + " · experimental" }
+            depthCaption.stringValue = "Dimmer                                      Brighter"
+            if deepRunning { detail.stringValue = depth.title }
         }
-        dial.isEnabled = controller.canAdjust && !deepRunning; dial.needsDisplay = true
-        presets.forEach { $0.isEnabled = controller.canAdjust && !deepRunning }
+        dial.isEnabled = controller.canAdjust || deepRunning; dial.needsDisplay = true
+        let isOn = deepRunning || (rememberedSteadyIndex ?? controller.selectedIndex) > 0 || (dial.externalValue ?? 0) > 0
+        offButton.title = isOn ? "Turn off" : "Turn on"
+        offButton.setAccessibilityLabel(isOn ? "Turn keyboard light off" : "Turn keyboard light on")
         offButton.isEnabled = controller.canAdjust || deepRunning
-        returnButton.isEnabled = deepRunning || controller.canRestore || controller.state == .unavailable
-        returnButton.title = controller.state == .unavailable ? "Find keyboard again" : controller.state == .failed ? "Restore saved settings" : "Use macOS"
-        if controller.verificationPending { stateTitle.stringValue = "Checking the keyboard…" }
-        else if controller.state == .controlling { stateTitle.stringValue = "Nighty has your level" }
-        else if controller.state == .sleeping { stateTitle.stringValue = "Resting with your Mac" }
-        else if controller.state == .failed { stateTitle.stringValue = "Settings need attention" }
-        else if controller.state == .unavailable { stateTitle.stringValue = "Keyboard unavailable" }
-        else { stateTitle.stringValue = "macOS has control" }
-        deepButton.title = deepRunning ? "Stop deeper dimming" : "Enable deeper dimming"
-        deepButton.isEnabled = deepRunning || controller.canAdjust
-        if deepRunning { stateTitle.stringValue = "Deeper dimming · experimental" }
+        returnButton.isEnabled = controller.canRestore || controller.state == .unavailable
+        returnButton.title = controller.state == .unavailable ? "Find keyboard" : "Restore saved settings"
+        deepButton.title = "Deeper dimming"
+        deepButton.state = deepRunning ? .on : .off
+        deepButton.isEnabled = deepRunning || controller.canAdjust || (controller.state != .failed && controller.state != .unavailable)
         depths.isEnabled = deepRunning || controller.canAdjust
         let recoveryVisible = controller.snapshot != nil && controller.state == .failed
         depths.isHidden = recoveryVisible; depthCaption.isHidden = recoveryVisible; keepCurrentButton.isHidden = !recoveryVisible
+        returnButton.isHidden = !recoveryVisible && controller.state != .unavailable
         keepCurrentButton.isEnabled = !controller.restorationPending
-        message.stringValue = pausedMessage ?? deepMessage ?? controller.message
-        if pausedMessage != nil { stateTitle.stringValue = statusTitleOverride ?? "Your level is remembered" }
+        if let paused = pausedMessage { message.stringValue = paused }
+        else if controller.state == .failed || controller.state == .unavailable { message.stringValue = deepMessage ?? controller.message }
+        else if deepRunning { message.stringValue = "Turns off when idle. Resumes when you return." }
+        else if let result = deepMessage { message.stringValue = result }
+        else if controller.verificationPending { message.stringValue = "Applying…" }
+        else { message.stringValue = "" }
     }
     func validatePreview() -> [String] {
         view.layoutSubtreeIfNeeded()
         var failures: [String] = []
         for child in view.subviews where !view.bounds.contains(child.frame) {
             failures.append("Subview exceeds panel bounds: \(type(of: child))")
+        }
+        let about = makeAboutAlert()
+        let credit = about.accessoryView as? NSTextField
+        if credit?.stringValue != "by anisharyal09" || credit?.alignment != .center || credit?.font?.pointSize != 11 {
+            failures.append("About author credit is missing")
         }
         let original = controller.selectedIndex
         if !dial.accessibilityPerformIncrement() || controller.selectedIndex != BrightnessScale.clampedIndex(original + 1) {
@@ -247,20 +266,25 @@ final class PanelController: NSViewController {
         controller.verifySelection()
         if !dial.accessibilityPerformDecrement() || controller.selectedIndex != original { failures.append("Dial decrement failed") }
         controller.verifySelection()
-        presetSelected(presets[1])
-        if controller.selectedIndex != 10 { failures.append("Work preset failed") }
-        controller.verifySelection()
-        turnOff()
+        togglePower()
         if controller.selectedIndex != 0 { failures.append("Off action failed") }
         controller.verifySelection()
         if !controller.restore() || controller.snapshot != nil { failures.append("Use macOS action failed") }
         deepSession()
-        if !deepRunning || !returnButton.isEnabled || !offButton.isEnabled || dial.isEnabled { failures.append("Continuous dimming controls failed") }
+        if !deepRunning || !offButton.isEnabled || !dial.isEnabled { failures.append("Continuous dimming controls failed") }
+        let oldDepth = depths.integerValue
+        if !dial.accessibilityPerformDecrement() || depths.integerValue != max(0, oldDepth - 1) { failures.append("Deep dial did not change depth") }
         depths.integerValue = 0; depthChanged()
         restore()
         if deepRunning { failures.append("Use macOS did not stop deeper dimming") }
-        deepSession(); turnOff(); controller.verifySelection()
-        if deepRunning || controller.selectedIndex != 0 { failures.append("Off did not stop deeper dimming") }
+        deepSession(); togglePower()
+        if deepRunning || controller.selectedIndex != 0 || dial.modeTitle != nil || offButton.title != "Turn on" {
+            failures.append("Center power did not immediately display Off")
+        }
+        controller.verifySelection()
+        togglePower()
+        if !deepRunning { failures.append("Center power did not resume the chosen deeper mode") }
+        restore()
         _ = controller.restore()
         let recoveryDevice = PreviewKeyboard()
         _ = controller.stageRecovery(.init(keyboardID: recoveryDevice.id, brightness: 0.04, automatic: false), device: recoveryDevice)
@@ -275,23 +299,38 @@ final class PanelController: NSViewController {
     func setDepthSelection(_ index: Int) { _ = view; depths.integerValue = index; update() }
 
     private func showDetail(_ index: Int) {
-        let hint = BrightnessScale.nightRange.contains(index) ? "Requested " + BrightnessScale.percent(index) + " · drag the rim to adjust" : "Drag the rim · arrow keys for a single step"
+        let hint = "Drag the rim to adjust"
         detail.stringValue = hint
     }
     @objc private func keepCurrent() { deepMessage = nil; if let action = onKeepCurrent { action() } else { _ = controller.keepCurrentSettings() } }
     @objc private func deepSession() { onDeepDimming?() }
     @objc private func depthChanged() { onDepthChanged?(depths.integerValue) }
-    @objc private func dialChanged() { chooseSteady(dial.selectedIndex) }
-    @objc private func presetSelected(_ sender: NSButton) { chooseSteady(sender.tag) }
-    @objc private func turnOff() { if deepRunning { onDeepOff?() } else { chooseSteady(0) } }
-    private func chooseSteady(_ index: Int) { if let action = onSteadySelection { action(index) } else { controller.select(index) } }
-    @objc private func restore() { if let action = onUseMacOS { action(); return }; deepMessage = nil; if deepRunning { onDeepDimming?(); return }; if controller.state == .unavailable { onRetry?() } else { _ = controller.restore() } }
-    @objc private func quitApp() { onQuit?() }
-    @objc private func showInfo() {
-        let alert = NSAlert(); alert.messageText = "A little light. Your choice."
-        alert.informativeText = "Free and open source. No payment, account, or time limit.\n\nChoose a preset or drag the dial. The keyboard receives one normal brightness request when you finish dragging. Arrow keys move one step.\n\nThe dial uses steady requests; neighboring night levels may look identical. Deeper dimming uses hardware fades and remembers its level through idle, sleep, and normal relaunches. It follows the macOS idle timeout. Light output and flicker are unverified.\n\nUse macOS returns your previous settings and closes Nighty’s write connection. macOS handles sleep and idle dimming. Changes you make in Settings take priority.\n\nNighty Keyboard 0.0.0\nNo accounts, analytics, or input logging."
-        alert.addButton(withTitle: "Done"); alert.runModal()
+    @objc private func dialChanged() { if deepRunning { depths.integerValue = dial.selectedIndex; depthChanged() } else { chooseSteady(dial.selectedIndex) } }
+    @objc private func togglePower() {
+        if deepRunning || (rememberedSteadyIndex ?? controller.selectedIndex) > 0 || (dial.externalValue ?? 0) > 0 { turnOff() }
+        else if lastPowerWasDeep { onDeepDimming?() }
+        else { chooseSteady(lastOnIndex) }
     }
+    private var lastPowerWasDeep = false
+    private var lastOnIndex = 10
+    @objc private func turnOff() { lastPowerWasDeep = deepRunning; if deepRunning { onDeepOff?() } else { chooseSteady(0) } }
+    private func chooseSteady(_ index: Int) { if index > 0 { lastOnIndex = index }; if let action = onSteadySelection { action(index) } else { controller.select(index) } }
+    @objc private func restore() { if let action = onUseMacOS { action(); return }; deepMessage = nil; if deepRunning { onDeepDimming?(); return }; if controller.state == .unavailable { onRetry?() } else { _ = controller.restore() } }
+    @objc private func supportApp() { onSupport?() }
+    @objc private func quitApp() { onQuit?() }
+    private func makeAboutAlert() -> NSAlert {
+        let alert = NSAlert(); alert.messageText = "Nighty Keyboard"
+        alert.informativeText = "Free and open source.\n\nDrag the dial for brightness. Click its center to turn the light on or off. Deeper dimming adds seven lower levels and follows your macOS idle timeout.\n\nRight-click the menu bar icon for macOS control and support.\n\nExperimental deeper dimming uses private macOS controls. Brightness and flicker vary by keyboard; battery and energy impact have not been measured.\n\nProvided as is, without warranties of any kind. See the MIT license.\n\nNo accounts, analytics, or input logging."
+        let credit = NSTextField(labelWithString: "by anisharyal09")
+        credit.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        credit.alignment = .center
+        credit.textColor = .labelColor
+        credit.frame = NSRect(x: 0, y: 0, width: 300, height: 24)
+        alert.accessoryView = credit
+        alert.addButton(withTitle: "Done")
+        return alert
+    }
+    @objc private func showInfo() { makeAboutAlert().runModal() }
     @available(macOS 13, *) private func refreshLogin() { login.state = SMAppService.mainApp.status == .enabled ? .on : .off }
     @objc private func toggleLogin() {
         guard #available(macOS 13, *) else { return }
