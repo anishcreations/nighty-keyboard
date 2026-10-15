@@ -10,10 +10,11 @@ A native macOS menu bar app for keyboard brightness. Swift, AppKit, and MIT lice
 
 - Brightness dial, arrow-key navigation, and Low, Work, and Bright presets.
 - Seven deeper-dimming levels, from Barely lit to Gentler.
+- Remember the chosen mode and level through idle, sleep, and normal relaunches.
 - Restore previous settings, keep current macOS settings, or turn the light off.
 - Open at login on macOS 13+.
 
-Free, with no time limit, accounts, analytics, or keyboard-input monitoring.
+Free, with no time limit, accounts, analytics, or input logging.
 Deeper dimming is experimental; physical brightness and flicker are not measured.
 
 ## Build and use
@@ -27,10 +28,13 @@ open "build/Nighty Keyboard.app"
 ```
 
 Click the menu bar dial and drag its rim or choose a preset. **Enable deeper
-dimming** runs with the panel closed. **Stop deeper dimming**, **Use macOS**, and
-**Off** end it. Sleep, idle, macOS changes, and command or timing failures also
-stop the mode; it does not restart automatically after sleep. Move the deeper
-slider left for less light. The darkest levels may still visibly pulse.
+dimming** runs with the panel closed; move its slider left for less light.
+
+Nighty follows the macOS keyboard idle timeout. Typing, mouse, and trackpad
+activity count as use. Idle, lock, and sleep pause fade commands; the saved mode
+resumes when activity returns and macOS releases the keyboard. A normal relaunch
+also remembers the enabled mode. **Off**, **Stop deeper dimming**, or **Use macOS**
+cancel automatic resume. The darkest levels may still pulse.
 
 ```sh
 ./scripts/package.sh
@@ -60,6 +64,8 @@ Sources/
 │   ├── Panel.swift                 Dial, presets, and recovery UI
 │   ├── BrightnessController.swift  Steady brightness and settings ownership
 │   ├── DeepDimmingSession.swift    Fade scheduling and depth settings
+│   ├── LightingMemory.swift        Preferences and idle/resume policy
+│   ├── NativeActivity.swift        Aggregate activity and preference storage
 │   ├── NativeDevice.swift          Keyboard adapter and recovery storage
 │   ├── NativePWM.swift             Raw HID adapter and diagnostics
 │   └── PWMSession.swift            Raw-report session and recovery
@@ -79,7 +85,10 @@ docs/                               Architecture, development, and preview
 on failure. A nonzero restore can clear macOS's idle-dim state. **Keep current
 macOS settings** clears recovery without a hardware write when the sensor
 preference already matches. Records are stored in
-`~/Library/Application Support/Nighty Keyboard/`.
+`~/Library/Application Support/Nighty Keyboard/`. `preferences.json` stores the
+chosen mode and levels separately from the original macOS snapshot. Crashes,
+invalid records, and failed restoration require explicit recovery; they never
+automatically reapply a level. After upgrading, enable a mode once to remember it.
 
 [Architecture](docs/ARCHITECTURE.md) · [Development](docs/DEVELOPMENT.md) ·
 [Changelog](CHANGELOG.md) · [MIT license](LICENSE)

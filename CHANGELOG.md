@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased · 0.0.0 build 10
+
+- Follow macOS idle timeout and resume the saved level on activity.
+- Preserve deeper and steady selections through idle, sleep, lock, and clean relaunches.
+- Read aggregate activity age without monitoring key contents or requesting input access.
+- Stop fade timers while paused; retain the original recovery snapshot.
+- Keep explicit Off and macOS handoff from automatically relighting the keyboard.
+- Gate crash, invalid-record, and preference-storage failures behind recovery.
+- Add 423 regression checks plus fake-device lifecycle and relaunch checks.
+- Simulated closed-panel profile: 153 fade wakeups in 15.04 seconds; actual battery drain remains unmeasured.
+- Physical resume and flicker need user validation.
+
 ## 0.0.0 · build 9 — 2026-10-14
 
 - Replaced 50 Hz polling with one-shot fade and readback deadlines.

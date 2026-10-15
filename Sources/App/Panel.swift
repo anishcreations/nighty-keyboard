@@ -35,6 +35,7 @@ private final class LightDial: NSControl {
     required init?(coder: NSCoder) { super.init(coder: coder) }
     var selectedIndex = 0 { didSet { needsDisplay = true } }
     var modeTitle: String?
+    var captionOverride: String?
     var externalValue: Float? { didSet { needsDisplay = true } }
     var onPreview: ((Int) -> Void)?
     private(set) var tracking = false
@@ -82,7 +83,7 @@ private final class LightDial: NSControl {
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Ink.primary.withAlphaComponent(enabledAlpha)]
         let textSize = (number as NSString).size(withAttributes: attributes)
         (number as NSString).draw(at: NSPoint(x: center.x - textSize.width / 2, y: center.y - textSize.height / 2 - 9), withAttributes: attributes)
-        let caption = modeTitle != nil ? "HARDWARE FADES" : externalValue != nil ? "MACOS LEVEL" : isNight ? "NIGHT LEVEL" : "KEYBOARD LIGHT"
+        let caption = captionOverride ?? (modeTitle != nil ? "HARDWARE FADES" : externalValue != nil ? "MACOS LEVEL" : isNight ? "NIGHT LEVEL" : "KEYBOARD LIGHT")
         let small: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9, weight: .medium), .foregroundColor: Ink.muted]
         let captionSize = (caption as NSString).size(withAttributes: small)
         (caption as NSString).draw(at: NSPoint(x: center.x - captionSize.width / 2, y: center.y + 26), withAttributes: small)
@@ -133,6 +134,12 @@ final class PanelController: NSViewController {
     let controller: BrightnessController
     var onRetry: (() -> Void)?
     var onQuit: (() -> Void)?
+    var onSteadySelection: ((Int) -> Void)?
+    var onUseMacOS: (() -> Void)?
+    var onKeepCurrent: (() -> Void)?
+    var pausedMessage: String?
+    var statusTitleOverride: String?
+    var rememberedSteadyIndex: Int?
     var onDeepDimming: (() -> Void)?
     var deepRunning = false
     var deepMessage: String?
@@ -197,8 +204,10 @@ final class PanelController: NSViewController {
         guard isViewLoaded else { return }
         if !dial.tracking {
             dial.externalValue = controller.state == .ready || controller.state == .paused ? controller.observedBrightness : nil
-            dial.selectedIndex = controller.selectedIndex; showDetail(controller.selectedIndex)
+            dial.selectedIndex = rememberedSteadyIndex ?? controller.selectedIndex; showDetail(dial.selectedIndex)
+            if rememberedSteadyIndex != nil { dial.externalValue = nil }
         }
+        dial.captionOverride = pausedMessage == nil ? nil : "SAVED LEVEL"
         dial.modeTitle = deepRunning ? "Deep \(depths.integerValue + 1)" : nil
         if let depth = DeepDimmingSession.Depth(rawValue: depths.integerValue) {
             depthCaption.stringValue = "Level \(depth.rawValue + 1) / 7 · " + depth.title + " · left is dimmer"
@@ -222,7 +231,8 @@ final class PanelController: NSViewController {
         let recoveryVisible = controller.snapshot != nil && controller.state == .failed
         depths.isHidden = recoveryVisible; depthCaption.isHidden = recoveryVisible; keepCurrentButton.isHidden = !recoveryVisible
         keepCurrentButton.isEnabled = !controller.restorationPending
-        message.stringValue = deepMessage ?? controller.message
+        message.stringValue = pausedMessage ?? deepMessage ?? controller.message
+        if pausedMessage != nil { stateTitle.stringValue = statusTitleOverride ?? "Your level is remembered" }
     }
     func validatePreview() -> [String] {
         view.layoutSubtreeIfNeeded()
@@ -262,21 +272,24 @@ final class PanelController: NSViewController {
         return failures
     }
 
+    func setDepthSelection(_ index: Int) { _ = view; depths.integerValue = index; update() }
+
     private func showDetail(_ index: Int) {
         let hint = BrightnessScale.nightRange.contains(index) ? "Requested " + BrightnessScale.percent(index) + " · drag the rim to adjust" : "Drag the rim · arrow keys for a single step"
         detail.stringValue = hint
     }
-    @objc private func keepCurrent() { deepMessage = nil; _ = controller.keepCurrentSettings() }
+    @objc private func keepCurrent() { deepMessage = nil; if let action = onKeepCurrent { action() } else { _ = controller.keepCurrentSettings() } }
     @objc private func deepSession() { onDeepDimming?() }
     @objc private func depthChanged() { onDepthChanged?(depths.integerValue) }
-    @objc private func dialChanged() { controller.select(dial.selectedIndex) }
-    @objc private func presetSelected(_ sender: NSButton) { controller.select(sender.tag) }
-    @objc private func turnOff() { if deepRunning { onDeepOff?() } else { controller.select(0) } }
-    @objc private func restore() { deepMessage = nil; if deepRunning { onDeepDimming?(); return }; if controller.state == .unavailable { onRetry?() } else { _ = controller.restore() } }
+    @objc private func dialChanged() { chooseSteady(dial.selectedIndex) }
+    @objc private func presetSelected(_ sender: NSButton) { chooseSteady(sender.tag) }
+    @objc private func turnOff() { if deepRunning { onDeepOff?() } else { chooseSteady(0) } }
+    private func chooseSteady(_ index: Int) { if let action = onSteadySelection { action(index) } else { controller.select(index) } }
+    @objc private func restore() { if let action = onUseMacOS { action(); return }; deepMessage = nil; if deepRunning { onDeepDimming?(); return }; if controller.state == .unavailable { onRetry?() } else { _ = controller.restore() } }
     @objc private func quitApp() { onQuit?() }
     @objc private func showInfo() {
         let alert = NSAlert(); alert.messageText = "A little light. Your choice."
-        alert.informativeText = "Free and open source. No payment, account, or time limit.\n\nChoose a preset or drag the dial. The keyboard receives one normal brightness request when you finish dragging. Arrow keys move one step.\n\nThe dial uses steady requests; neighboring night levels may look identical. Deeper dimming stays active until stopped, using hardware fades. Its light output and flicker are unverified.\n\nUse macOS returns your previous settings and closes Nighty’s write connection. macOS handles sleep and idle dimming. Changes you make in Settings take priority.\n\nNighty Keyboard 0.0.0\nNo accounts, analytics, or keyboard monitoring."
+        alert.informativeText = "Free and open source. No payment, account, or time limit.\n\nChoose a preset or drag the dial. The keyboard receives one normal brightness request when you finish dragging. Arrow keys move one step.\n\nThe dial uses steady requests; neighboring night levels may look identical. Deeper dimming uses hardware fades and remembers its level through idle, sleep, and normal relaunches. It follows the macOS idle timeout. Light output and flicker are unverified.\n\nUse macOS returns your previous settings and closes Nighty’s write connection. macOS handles sleep and idle dimming. Changes you make in Settings take priority.\n\nNighty Keyboard 0.0.0\nNo accounts, analytics, or input logging."
         alert.addButton(withTitle: "Done"); alert.runModal()
     }
     @available(macOS 13, *) private func refreshLogin() { login.state = SMAppService.mainApp.status == .enabled ? .on : .off }

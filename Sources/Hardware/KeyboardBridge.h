@@ -17,6 +17,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)setFade:(float)value milliseconds:(int)milliseconds keyboard:(uint64_t)keyboard;
 - (void)releaseManualControl;
 - (BOOL)isSuppressed:(uint64_t)keyboard;
+- (nullable NSNumber *)idleTimeout:(uint64_t)keyboard;
+- (nullable NSNumber *)idleActive:(uint64_t)keyboard;
 - (BOOL)isIdleDimmed:(uint64_t)keyboard;
 - (BOOL)supportsIdleSuspension;
 - (BOOL)idleDimmingSuspended:(uint64_t)keyboard;

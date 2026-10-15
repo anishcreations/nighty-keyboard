@@ -24,11 +24,15 @@ installers, and moves diagnostic records to ignored `.local-diagnostics/`.
 ```sh
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --preview
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --verify-ui
+"build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --verify-lifecycle
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --profile-preview
 "build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --render-preview /tmp/nighty.png
+"build/Nighty Keyboard.app/Contents/MacOS/NightyKeyboard" --render-preview /tmp/nighty-idle.png --preview-idle
 ```
 
-Tests use fake devices. `--verify-ui` checks controls and layout; `--profile-preview`
+Tests use fake devices. `--verify-lifecycle` checks repeated idle/wake cycles,
+nested sleep and lock, clean and unclean relaunches, sensor ownership, and failed
+preference storage without reading or changing real user settings. `--verify-ui` checks controls and layout; `--profile-preview`
 reports wakeups during 15 seconds of simulated dimming. Neither measures battery
 drain, hardware-call overhead, or physical light output.
 

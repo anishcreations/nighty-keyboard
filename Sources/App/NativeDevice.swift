@@ -7,7 +7,7 @@ final class NativeKeyboard: KeyboardDevice {
     var brightness: Float { bridge.brightness(id) }
     var automatic: Bool { bridge.automaticBrightness(id) }
     var suppressed: Bool { bridge.isSuppressed(id) }
-    var idleDimmed: Bool { bridge.isIdleDimmed(id) }
+    var idleDimmed: Bool { bridge.idleActive(id)?.boolValue ?? bridge.isIdleDimmed(id) }
     var idleDimmingSuspended: Bool? { bridge.supportsIdleSuspension() ? bridge.idleDimmingSuspended(id) : nil }
     func setIdleDimmingSuspended(_ suspended: Bool) -> Bool { bridge.setIdleDimmingSuspended(suspended, keyboard: id) }
     func restoreBrightness(_ value: Float) -> Bool { bridge.restoreBrightness(value, keyboard: id) }
@@ -37,6 +37,7 @@ final class RecoveryStore {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         url = root.appendingPathComponent("Nighty Keyboard/keyboard-session.json")
     }
+    var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
     func load() -> BrightnessController.Snapshot? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(BrightnessController.Snapshot.self, from: data)

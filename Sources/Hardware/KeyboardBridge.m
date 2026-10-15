@@ -43,6 +43,7 @@ static BOOL BLHasSignature(id obj, NSString *name, const char *result, NSArray<N
 @implementation BLKeyboardBridge {
     id _client;
     id _writer;
+    id _observer;
     BOOL _available;
     NSString *_availabilityReason;
 }
@@ -151,6 +152,16 @@ static BOOL BLHasSignature(id obj, NSString *name, const char *result, NSArray<N
     if (!BLHasSignature(_client, @"isBacklightSuppressedOnKeyboard:", "B", @[@"Q"])) return NO;
     @try { return [_client isBacklightSuppressedOnKeyboard:keyboard]; } @catch (NSException *exception) { return NO; }
 }
+- (NSNumber *)readStatus:(NSString *)key keyboard:(uint64_t)keyboard {
+    @try {
+        if (!_observer) _observer = [[NSClassFromString(@"BrightnessSystemClient") alloc] init];
+        if (!BLHasSignature(_observer, @"copyPropertyForKey:keyboardID:", "@", @[@"@", @"Q"])) return nil;
+        id value = [_observer copyPropertyForKey:key keyboardID:keyboard];
+        return [value isKindOfClass:NSNumber.class] ? value : nil;
+    } @catch (NSException *exception) { return nil; }
+}
+- (NSNumber *)idleTimeout:(uint64_t)keyboard { return [self readStatus:@"KeyboardBacklightIdleDimTime" keyboard:keyboard]; }
+- (NSNumber *)idleActive:(uint64_t)keyboard { return [self readStatus:@"KeyboardBacklightIdleDimActive" keyboard:keyboard]; }
 - (BOOL)isIdleDimmed:(uint64_t)keyboard {
     if (!BLHasSignature(_client, @"isBacklightDimmedOnKeyboard:", "B", @[@"Q"])) return NO;
     @try { return [_client isBacklightDimmedOnKeyboard:keyboard]; } @catch (NSException *exception) { return NO; }

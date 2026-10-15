@@ -8,6 +8,7 @@ final class DeepDimmingSession {
     private let device: KeyboardDevice
     private(set) var snapshot: BrightnessController.Snapshot?
     private(set) var running = false
+    private(set) var isPaused = false
     private(set) var restorationAwaitingConfirmation = false
     private(set) var message = ""
     var saveRecovery: ((BrightnessController.Snapshot?) -> Bool)?
@@ -66,11 +67,12 @@ final class DeepDimmingSession {
         guard saveRecovery?(saved) ?? true else { message = "Could not save settings. No changes made."; return false }
         snapshot = saved
         guard !device.automatic || device.setAutomatic(false) else { _ = stop(); return false }
+        isPaused = false
         running = true; started = now; initialized = false; rising = true; ramp = nil
         nextStatusCheck = now + 0.5
         // Establish Off with a smooth ramp before entering the nominal subminimum envelope.
         guard command(0, duration: 600, at: now, next: 0.7) else { return false }
-        message = "Deeper dimming active until stopped. Physical light output is unverified."
+        message = "Your deeper level is active. Idle and sleep pause it automatically."
         return true
     }
 
@@ -141,19 +143,41 @@ final class DeepDimmingSession {
         return true
     }
 
-    /// Sleep/lock does not write brightness or modify macOS idle flags. Keep recovery for later.
+    /// Pause ownership without restoring the sensor or saving idle-zero as a baseline.
     func suspend() {
         guard snapshot != nil else { return }
-        running = false; awaitingReadback = false
-        if let saved = snapshot, !device.automatic { _ = device.setAutomatic(saved.automatic) }
+        running = false; isPaused = true; awaitingReadback = false
         device.releaseControl()
-        message = "Deeper dimming stopped for sleep or idle. Saved brightness needs restoration after waking."
+        message = "Paused while idle. Your level is remembered."
+    }
+
+    func adopt(_ saved: BrightnessController.Snapshot) -> Bool {
+        guard snapshot == nil, saved.keyboardID == device.id, saved.brightness.isFinite,
+              (0...1).contains(saved.brightness), saved.idleDimmingSuspended == nil else { return false }
+        snapshot = saved; isPaused = true; return true
+    }
+
+    @discardableResult func resume(at now: TimeInterval, allowAutomaticDisable: Bool = false) -> Bool {
+        guard isPaused, let saved = snapshot, saved.keyboardID == device.id, now.isFinite,
+              !device.idleDimmed, !device.suppressed || device.brightness == 0 else { return false }
+        guard !device.automatic || (allowAutomaticDisable && device.setAutomatic(false)) else { return false }
+        let actual = device.brightness
+        guard actual.isFinite, (0...1).contains(actual) else { return false }
+        running = true; isPaused = false; started = now; nextStatusCheck = now + 0.5
+        initialized = false; rising = true; awaitingReadback = false; ramp = nil
+        if actual == 0 {
+            initialized = true; ramp = FadeRamp(value: 0, target: 0, started: now, duration: 0)
+            issueRamp(up: true, at: now, transitioning: true)
+        } else if !command(0, duration: 600, at: now, next: 0.7) { return false }
+        message = "Your remembered deeper level is active."; return running
     }
 
     @discardableResult func stop(reason: String = "Deeper dimming stopped.", preserveCurrent: Bool = false) -> Bool {
-        running = false; awaitingReadback = false
+        running = false; isPaused = false; awaitingReadback = false
         guard let saved = snapshot else { return true }
-        if device.idleDimmed || (device.suppressed && target != 0) { suspend(); return false }
+        if !preserveCurrent && (device.idleDimmed || (device.suppressed && target != 0)) {
+            suspend(); if !device.automatic { _ = device.setAutomatic(saved.automatic) }; device.releaseControl(); return false
+        }
         // Zero duration cancels the in-flight ramp before releasing our connection.
         let restored = preserveCurrent || device.setFade(saved.brightness, milliseconds: 0) || device.setBrightness(saved.brightness)
         let actual = device.brightness

@@ -48,8 +48,32 @@ initial and level-change transitions use four seconds.
 One-shot timers follow readback and fade deadlines, with status checks scheduled
 every 500 ms. Normal observation pauses during deeper mode. Retargeting accounts
 for elapsed time and preserves the current ramp when switching depth. Rejected
-commands, excessive drift, macOS changes, or idle/sleep stop the session.
+commands and excessive drift stop the session; macOS changes hand back control,
+and idle/sleep pause it.
 Intentional Off suppression is allowed; stale commands are never replayed.
+
+## Idle, sleep, and preferences
+
+`LightingMemory` stores a versioned desired mode, both selected levels, and a
+clean-shutdown marker. These preferences are separate from the original macOS
+recovery snapshot. New installs start under macOS control until a mode is enabled.
+
+`NativeActivity` reads aggregate `HIDIdleTime`, the macOS keyboard timeout and idle
+flag, and lock/display/lid state. No input events or key contents are recorded.
+Active status is cached for 500 ms. Paused activity checks run every two seconds;
+system sleep cancels them. A wake retries readiness every 500 ms for ten seconds,
+then leaves the level pending for ordinary activity checks.
+
+Idle pauses ownership without restoring the sensor or overwriting the original
+brightness with zero. Activity resumes the same snapshot and desired level only
+after macOS releases idle suppression. Independent sleep/display/lock reasons
+prevent early resume. Level changes while paused update the saved preference.
+
+A clean relaunch may resume preferences or an owned paused snapshot; startup marks
+the session unclean before any hardware writes. Explicit handoff disables resume.
+Quit returns original settings, or just the sensor while asleep; clean exit is
+recorded only when that cleanup is confirmed. Crashes, unknown data, unavailable
+activity metadata, and failed preference writes never silently restart lighting.
 
 ## Recovery
 

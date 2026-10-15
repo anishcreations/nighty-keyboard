@@ -318,7 +318,7 @@ final class FakePWM: PWMDriver {
             let d = FakeKeyboard(); let t = DeepDimmingSession(device: d); _ = t.start(at: 0)
             d.suppressed = true; d.idleDimmed = true; t.tick(at: 0.1)
             expect(!t.running && t.snapshot != nil && d.fades.count == 1, "Suppression retains recovery with no brightness restoration write")
-            expect(d.automatic && d.releaseCount == 1 && d.idleWrites.isEmpty, "Suppression restores sensor and closes connection without idle flag changes")
+            expect(!d.automatic && d.releaseCount == 1 && d.idleWrites.isEmpty, "Idle pause keeps sensor ownership and closes the writer without idle flag changes")
             d.suppressed = false; d.idleDimmed = false
             expect(t.stop() && d.brightness == 0.4, "Saved trial baseline can be restored after activity resumes")
         }
@@ -474,6 +474,102 @@ final class FakePWM: PWMDriver {
             expect(t.running, "Small delivery pause is tolerated when long-fade drift stays bounded")
             t.tick(at: t.nextWakeTime! + 2)
             expect(!t.running && d.brightness == 0.4, "Large stale deadline restores settings instead of catching up")
+        }
+        do {
+            let active = ActivitySnapshot(age: 1, timeout: 10, keyboardIdle: false)
+            expect(active.decision == .active, "Recent keyboard or pointer activity permits resume")
+            expect(ActivitySnapshot(age: 11, timeout: 10, keyboardIdle: false).decision == .idle, "macOS timeout pauses before further fades")
+            expect(ActivitySnapshot(age: 1000, timeout: 0, keyboardIdle: false).decision == .active, "Never timeout remains active")
+            expect(ActivitySnapshot(age: 0, timeout: 10, keyboardIdle: true).decision == .idle, "macOS idle flag takes priority over fresh aggregate activity")
+            expect(ActivitySnapshot(age: nil, timeout: 10, keyboardIdle: false).decision == .unavailable, "Missing activity fails closed")
+            expect(ActivitySnapshot(age: 0, timeout: nil, keyboardIdle: false).decision == .unavailable, "Missing timeout fails closed")
+            expect(ActivitySnapshot(age: 0, timeout: 10, keyboardIdle: nil).decision == .unavailable, "Missing macOS idle status fails closed")
+            expect(ActivitySnapshot(age: 0, timeout: 10, keyboardIdle: false, blocked: true).decision == .blocked, "Lock or display sleep prevents resume")
+            expect(ActivitySnapshot(age: .nan, timeout: 10, keyboardIdle: false).decision == .unavailable, "Invalid idle metadata cannot enable hardware")
+        }
+        do {
+            let m = LightingMemory(); var persisted: LightingPreferences?
+            m.persist = { persisted = $0; return true }
+            expect(m.beginLaunch() && !m.enabled, "New installs never auto-enable a mode")
+            expect(m.select(.deep, depth: 0) && persisted?.depthIndex == 0, "Selection saves desired depth before activation")
+            m.activate(); m.pause()
+            expect(m.paused && m.shouldResume(.preview), "Idle leaves deep mode enabled and resumable")
+            expect(!m.shouldResume(.init(age: 11, timeout: 10, keyboardIdle: true)), "Idle cannot trigger an automatic restart")
+            m.pause(sleeping: true)
+            expect(m.state == .sleepPaused && m.preferences.depthIndex == 0, "Sleep retains the desired depth")
+            expect(m.markCleanExit(), "A completed clean exit can be recorded")
+            let restored = LightingMemory(persisted!)
+            expect(restored.shouldResume(.preview) && restored.previousExitWasClean, "Clean relaunch resumes saved enabled mode")
+            _ = restored.beginLaunch()
+            expect(!restored.preferences.cleanShutdown, "A running launch is marked unclean before hardware use")
+            let crashed = LightingMemory(restored.preferences)
+            expect(crashed.state == .failed && !crashed.shouldResume(.preview), "Crash never silently resumes hardware")
+            expect(!crashed.markCleanExit(), "Quitting an unacknowledged crash cannot bypass recovery on next launch")
+            _ = m.select(.system)
+            expect(!m.shouldResume(.preview) && !m.enabled, "Explicit handoff cancels pending auto-resume")
+        }
+        do {
+            let m = LightingMemory(); m.persist = { _ in false }
+            expect(!m.select(.deep) && m.preferences.mode == .system && m.state == .failed, "Failed preference storage prevents enabling a mode")
+            var invalid = LightingPreferences(); invalid.depthIndex = 999
+            expect(LightingMemory(invalid).preferences.mode == .system, "Invalid preferences default to macOS control")
+        }
+        for depth in DeepDimmingSession.Depth.allCases {
+            let d = FakeKeyboard(); let session = DeepDimmingSession(device: d)
+            session.selectDepth(depth, at: 0); _ = session.start(at: 0)
+            for cycle in 0..<5 {
+                let writes = d.fades.count; d.idleDimmed = true; d.brightness = 0
+                session.suspend()
+                expect(session.isPaused && !session.running && session.nextWakeTime == nil && d.fades.count == writes,
+                       "Idle and sleep stop all fade commands")
+                expect(session.snapshot?.brightness == 0.4 && !d.automatic, "Idle zero never replaces original brightness or sensor ownership")
+                expect(!session.resume(at: Double(cycle + 1)) && d.fades.count == writes, "No resume while macOS reports idle")
+                d.idleDimmed = false; d.suppressed = true
+                expect(session.resume(at: Double(cycle + 1)) && session.depth == depth, "Activity resumes the same depth from Off")
+                expect(session.snapshot?.brightness == 0.4, "Resume retains the first baseline across repeated cycles")
+                d.suppressed = false
+            }
+            expect(session.stop() && d.brightness == 0.4 && d.automatic, "Stop after repeated idle cycles restores the true original settings")
+        }
+        do {
+            let d = FakeKeyboard(); let original = BrightnessController.Snapshot(keyboardID: d.id, brightness: 0.4, automatic: true)
+            d.brightness = 0; d.automatic = true
+            let session = DeepDimmingSession(device: d)
+            expect(session.adopt(original), "Clean paused relaunch adopts the existing recovery snapshot")
+            expect(session.resume(at: 1, allowAutomaticDisable: true) && session.snapshot?.brightness == 0.4,
+                   "Clean relaunch resumes without snapshotting Off")
+            expect(session.stop() && d.brightness == 0.4, "Adopted session returns to original level")
+            let wrong = DeepDimmingSession(device: d)
+            expect(!wrong.adopt(.init(keyboardID: 1000, brightness: 0.2, automatic: false)), "Cannot resume onto a different keyboard")
+        }
+        do {
+            let d = FakeKeyboard(); let c = BrightnessController(); c.attach(d); c.select(10); c.verifySelection()
+            d.brightness = 0; d.idleDimmed = true; let writes = d.brightnessWrites.count
+            c.pauseRememberedLevel()
+            expect(c.snapshot?.brightness == 0.4 && d.brightnessWrites.count == writes, "Steady idle retains its baseline without writing")
+            d.idleDimmed = false; c.resumeRememberedLevel(10); c.verifySelection()
+            expect(d.brightness == 0.125 && c.snapshot?.brightness == 0.4, "Steady wake reapplies the saved selection with the original baseline")
+            expect(c.restore() && d.brightness == 0.4 && d.automatic, "Steady stop restores original settings after idle")
+        }
+        do {
+            var prefs = LightingPreferences(); prefs.mode = .deep; prefs.depthIndex = 0; prefs.cleanShutdown = true
+            let bytes = try! JSONEncoder().encode(prefs)
+            let decoded = try! JSONDecoder().decode(LightingPreferences.self, from: bytes)
+            expect(decoded == prefs && LightingMemory(decoded).shouldResume(.preview), "Preferences preserve mode and darkest level through serialization")
+            var invalid = prefs; invalid.formatVersion = 999
+            expect(LightingMemory(invalid).preferences.mode == .system, "Unknown preference formats fail closed")
+        }
+        do {
+            let m = LightingMemory(); var failures = 0
+            m.persist = { _ in false }; m.onPersistenceFailure = { failures += 1 }
+            expect(!m.select(.deep) && failures == 1 && !m.enabled, "Persistence failures notify the host before hardware use")
+        }
+        do {
+            let d = FakeKeyboard(); let session = DeepDimmingSession(device: d); _ = session.start(at: 0)
+            d.idleDimmed = true; session.suspend(); d.automatic = true
+            let writes = d.fades.count
+            expect(session.stop(preserveCurrent: true) && d.fades.count == writes && d.automatic,
+                   "User automatic-brightness changes can release an idle session without relighting")
         }
         print("PASS: \(assertions) assertions covering state ownership, no repeated writes, recovery, sleep, PWM readback, continuous fades, and failures.")
     }

@@ -276,6 +276,29 @@ final class BrightnessController {
         message = "Current macOS settings kept. You can choose a level."; notify(); return true
     }
 
+    @discardableResult func adoptForResume(_ saved: Snapshot, device: KeyboardDevice) -> Bool {
+        guard snapshot == nil, saved.keyboardID == device.id, saved.brightness.isFinite,
+              (0...1).contains(saved.brightness), saved.idleDimmingSuspended == nil else { return false }
+        self.device = device; snapshot = saved; state = .paused; recoveryStaged = false
+        return true
+    }
+    func requireRecovery(_ reason: String) { fail(reason) }
+    func pauseRememberedLevel() {
+        verificationPending = false; restorationPending = false
+        device?.releaseControl(); state = .paused
+        message = "Paused while idle. Your level is remembered."; notify()
+    }
+    func resumeRememberedLevel(_ index: Int) { state = .paused; select(index) }
+    @discardableResult func yieldToMacOS() -> Bool {
+        guard let device = device else { return false }
+        let sensorOK = snapshot.map { device.automatic || device.setAutomatic($0.automatic) } ?? true
+        device.releaseControl()
+        guard sensorOK && (saveRecovery?(nil) ?? true) else { fail("Could not release saved settings. Try Restore."); return false }
+        snapshot = nil; verificationPending = false; recoveryStaged = false; state = .paused
+        observedBrightness = device.brightness; selectedIndex = BrightnessScale.nearest(observedBrightness)
+        message = "macOS has control."; notify(); return true
+    }
+
     func stageRecovery(_ snapshot: Snapshot, device: KeyboardDevice) -> Bool {
         guard self.snapshot == nil, snapshot.keyboardID == device.id, snapshot.brightness.isFinite, (0...1).contains(snapshot.brightness) else { return false }
         self.device = device; self.snapshot = snapshot; state = .failed; recoveryStaged = true
